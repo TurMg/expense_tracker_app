@@ -137,7 +137,9 @@ class OcrService {
     if (lower.contains(' member ') || lower.startsWith('member')) return true;
     if (lower.contains(' kembali ') || lower.startsWith('kembali')) return true;
     if (lower.contains(' tunai ') || lower.startsWith('tunai')) return true;
-    if (lower.contains(' total item')) return true;
+    if (lower.contains(' total item ') || lower.startsWith('total')) return true;
+    if (lower.endsWith(' item ')) return true;
+    if (lower.startsWith(' total ') || lower.endsWith(' item ')) return true;
     if (lower.contains(':')) return true;
     if (lower.startsWith('v.') || lower.startsWith('ver ') || lower.contains('version')) return true;
     if (lower.contains(' wa ') || lower.contains('wa:') || lower.startsWith('wa')) return true;

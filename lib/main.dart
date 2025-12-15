@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'presentation/screens/add_transaction_screen.dart'; // Import halaman tadi
+import 'presentation/screens/home_screen.dart'; // Import halaman utama
 
 void main() {
   runApp(const MyApp());
@@ -17,8 +17,8 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      // Kita langsung tembak ke halaman Add Transaction dulu buat testing
-      home: const AddTransactionScreen(),
+      // Set home screen sebagai halaman utama
+      home: const HomeScreen(),
     );
   }
 }

@@ -1,220 +1,403 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
-import '../../logic/services/ocr_service.dart';
 import '../../data/local/database_helper.dart';
 
 class AddTransactionScreen extends StatefulWidget {
-  const AddTransactionScreen({super.key});
+  // Parameter Opsional (Diisi kalau hasil Scan, Kosong kalau Manual)
+  final double? initialAmount;
+  final DateTime? initialDate;
+  final File? initialImage;
+
+  const AddTransactionScreen(
+      {super.key, this.initialAmount, this.initialDate, this.initialImage});
 
   @override
   State<AddTransactionScreen> createState() => _AddTransactionScreenState();
 }
 
 class _AddTransactionScreenState extends State<AddTransactionScreen> {
-  final _amountController = TextEditingController();
-  final _noteController = TextEditingController();
-  final _ocrService = OcrService();
+  // Controller
+  late TextEditingController _amountController;
+  late TextEditingController _noteController;
 
-  File? _receiptImage;
-  bool _isScanning = false;
   DateTime _selectedDate = DateTime.now();
-  String _selectedCategory = 'Makan';
-  final List<String> _categories = ['Makan', 'Transport', 'Belanja', 'Gaji'];
+  String _selectedCategory = 'Makan'; // Default
+  bool _isExpense = true; // Toggle Pengeluaran/Pemasukan
+  bool _isAmountFilled = false; // Untuk track apakah amount sudah diisi
 
-  // --- LOGIC UTAMA: SCANNER ---
-  Future<void> _scanReceipt() async {
-    try {
-      final options = DocumentScannerOptions(
-        documentFormat: DocumentFormat.jpeg,
-        mode: ScannerMode.full,
-        pageLimit: 1,
-        isGalleryImport: true,
-      );
+  // Warna dari desain
+  final Color _orangeColor =
+      const Color(0xFFF4A285); // Warna Peach/Orange Tombol
+  final Color _greenBtnColor =
+      const Color(0xFF98D1B6); // Warna Hijau Tombol Simpan
+  final Color _textAmountColor = const Color(0xFFF4A285);
 
-      final scanner = DocumentScanner(options: options);
-      final result = await scanner.scanDocument();
+  final List<Map<String, dynamic>> _categories = [
+    {
+      'id': 'Makan',
+      'icon': Icons.restaurant_rounded,
+      'color': Color(0xFFF4A285)
+    },
+    {
+      'id': 'Transport',
+      'icon': Icons.directions_bus_rounded,
+      'color': Color(0xFF81C784)
+    },
+    {
+      'id': 'Belanja',
+      'icon': Icons.shopping_bag_rounded,
+      'color': Color(0xFF64B5F6)
+    },
+    {
+      'id': 'Tagihan',
+      'icon': Icons.receipt_long_rounded,
+      'color': Color(0xFFE57373)
+    },
+  ];
 
-      if (result.images.isEmpty) return;
-
-      final scannedPath = result.images.first;
-
-      setState(() {
-        _receiptImage = File(scannedPath);
-        _isScanning = true;
-      });
-
-      // Proses OCR
-      final ocrResult = await _ocrService.scanReceipt(scannedPath);
-
-      if (mounted) {
-        setState(() {
-          _isScanning = false;
-
-          // LANGSUNG ISI TOTAL
-          bool dataFound = false;
-          if (ocrResult.amount != null) {
-            _amountController.text = ocrResult.amount!.toStringAsFixed(0);
-            dataFound = true;
-          }
-
-          // ISI TANGGAL
-          if (ocrResult.date != null) {
-            _selectedDate = ocrResult.date!;
-          }
-
-          if (dataFound) {
-            String msg =
-                "Scan sukses! Rp ${ocrResult.amount?.toStringAsFixed(0) ?? '-'}";
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(msg), backgroundColor: Colors.green),
-            );
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text("Total tidak ditemukan. Pastikan foto jelas."),
-                backgroundColor: Colors.orange,
-              ),
-            );
-          }
-        });
-      }
-    } catch (e) {
-      setState(() => _isScanning = false);
-      print("Error Scan: $e");
+  @override
+  void initState() {
+    super.initState();
+    // Isi data kalau ada (dari hasil scan)
+    _amountController = TextEditingController(
+        text: widget.initialAmount != null
+            ? widget.initialAmount!.toStringAsFixed(0)
+            : '');
+    // Set initial state untuk amount filled
+    _isAmountFilled = widget.initialAmount != null && widget.initialAmount! > 0;
+    if (widget.initialDate != null) {
+      _selectedDate = widget.initialDate!;
     }
-  }
-
-  // --- LOGIC SIMPAN (Sama) ---
-  Future<void> _saveTransaction() async {
-    if (_amountController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Isi dulu nominalnya bro!")),
-      );
-      return;
-    }
-
-    final transaction = {
-      'id': const Uuid().v4(),
-      'amount': double.parse(_amountController.text),
-      'categoryId': _selectedCategory,
-      'date': _selectedDate.toIso8601String(),
-      'note': _noteController.text,
-      'receiptPath': _receiptImage?.path,
-    };
-
-    await DatabaseHelper.instance.insert('transactions', transaction);
-    if (mounted) Navigator.pop(context, true);
+    _noteController = TextEditingController();
   }
 
   @override
   void dispose() {
     _amountController.dispose();
     _noteController.dispose();
-    _ocrService.dispose();
     super.dispose();
+  }
+
+  Future<void> _saveTransaction() async {
+    if (_amountController.text.isEmpty) {
+      print('Amount tidak boleh kosong');
+      return;
+    }
+
+    try {
+      final transaction = {
+        'id': const Uuid().v4(),
+        'amount': double.parse(
+            _amountController.text.replaceAll('.', '')), // Hapus titik format
+        'categoryId': _selectedCategory,
+        'date': _selectedDate.toIso8601String(),
+        'note': _noteController.text,
+        'receiptPath':
+            widget.initialImage?.path, // Simpan path gambar kalau ada
+        'type': _isExpense ? 'EXPENSE' : 'INCOME', // Tentukan tipe transaksi
+      };
+
+      print('Menyimpan transaksi: $transaction');
+      final result =
+          await DatabaseHelper.instance.insert('transactions', transaction);
+      print('Transaksi berhasil disimpan dengan ID: $result');
+
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      print('Error menyimpan transaksi: $e');
+    }
+  }
+
+  // Format ribuan saat ngetik (Simple formatter)
+  String _formatNumber(String s) {
+    if (s.isEmpty) return '';
+    s = s.replaceAll('.', ''); // Hapus titik lama
+    if (int.tryParse(s) == null) return '';
+    final number = int.parse(s);
+    return NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0)
+        .format(number);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Catat Transaksi")),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            GestureDetector(
-              onTap: _scanReceipt,
-              child: Container(
-                height: 200,
-                decoration: BoxDecoration(
-                  color: Colors.grey[200],
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.grey[400]!),
-                  image: _receiptImage != null
-                      ? DecorationImage(
-                          image: FileImage(_receiptImage!), fit: BoxFit.contain)
-                      : null,
-                ),
-                child: _isScanning
-                    ? const Center(child: CircularProgressIndicator())
-                    : _receiptImage == null
-                        ? const Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.document_scanner_rounded,
-                                  size: 50, color: Colors.blue),
-                              Text("Tap buat Scan Otomatis",
-                                  style: TextStyle(
-                                      color: Colors.blue,
-                                      fontWeight: FontWeight.bold)),
-                            ],
-                          )
-                        : null,
-              ),
-            ),
-            const SizedBox(height: 20),
-            TextField(
-              controller: _amountController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: "Total Belanja (Rp)",
-                border: OutlineInputBorder(),
-                prefixText: "Rp ",
-                suffixIcon: Icon(Icons.attach_money),
-              ),
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              value: _selectedCategory,
-              items: _categories.map((cat) {
-                return DropdownMenuItem(value: cat, child: Text(cat));
-              }).toList(),
-              onChanged: (val) => setState(() => _selectedCategory = val!),
-              decoration: const InputDecoration(
-                  labelText: "Kategori", border: OutlineInputBorder()),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _noteController,
-              decoration: const InputDecoration(
-                  labelText: "Catatan (Opsional)",
-                  border: OutlineInputBorder(),
-                  icon: Icon(Icons.note)),
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                  "Tanggal: ${DateFormat('dd MMM yyyy').format(_selectedDate)}"),
-              trailing: const Icon(Icons.calendar_today),
-              onTap: () async {
-                final picked = await showDatePicker(
-                  context: context,
-                  initialDate: _selectedDate,
-                  firstDate: DateTime(2020),
-                  lastDate: DateTime.now(),
-                );
-                if (picked != null) setState(() => _selectedDate = picked);
-              },
-            ),
-            const SizedBox(height: 30),
-            ElevatedButton(
-              onPressed: _saveTransaction,
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                backgroundColor: Colors.blueAccent,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text("SIMPAN TRANSAKSI",
-                  style: TextStyle(fontSize: 18)),
-            ),
-          ],
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(Icons.close, color: Colors.black87),
+          onPressed: () => Navigator.pop(context),
         ),
+        title: const Text("Tambah Transaksi",
+            style:
+                TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const SizedBox(height: 20),
+
+                  // 1. TOGGLE (Pengeluaran / Pemasukan)
+                  Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(12)),
+                    child: Row(
+                      children: [
+                        Expanded(
+                            child:
+                                _buildToggleButton("Pengeluaran", _isExpense)),
+                        Expanded(
+                            child:
+                                _buildToggleButton("Pemasukan", !_isExpense)),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 30),
+
+                  // 2. INPUT JUMLAH (GEDE BANGET)
+                  const Text("Jumlah", style: TextStyle(color: Colors.grey)),
+                  TextField(
+                    controller: _amountController,
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 40,
+                        fontWeight: FontWeight.bold,
+                        color: _textAmountColor),
+                    decoration: InputDecoration(
+                      border: InputBorder.none,
+                      hintText: "Rp 0",
+                      hintStyle:
+                          TextStyle(color: _textAmountColor.withOpacity(0.5)),
+                      prefixText:
+                          _amountController.text.isNotEmpty ? "Rp " : null,
+                      prefixStyle: TextStyle(
+                          fontSize: 40,
+                          fontWeight: FontWeight.bold,
+                          color: _textAmountColor),
+                    ),
+                    onChanged: (val) {
+                      // Logic format ribuan sederhana
+                      String formatted = _formatNumber(val);
+                      if (formatted != val) {
+                        _amountController.value = TextEditingValue(
+                          text: formatted,
+                          selection:
+                              TextSelection.collapsed(offset: formatted.length),
+                        );
+                      }
+                      // Update state untuk warna tombol
+                      setState(() {
+                        _isAmountFilled = formatted.isNotEmpty && formatted != '0';
+                      });
+                    },
+                  ),
+
+                  const SizedBox(height: 30),
+                  const Divider(),
+                  const SizedBox(height: 20),
+
+                  // 3. KATEGORI GRID
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text("Kategori",
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 16)),
+                      Text("Lihat Semua",
+                          style:
+                              TextStyle(color: Colors.blue[400], fontSize: 12)),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: _categories
+                        .map((cat) => _buildCategoryItem(cat))
+                        .toList(),
+                  ),
+
+                  const SizedBox(height: 30),
+
+                  // 4. TANGGAL
+                  Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text("Tanggal",
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 16))),
+                  const SizedBox(height: 10),
+                  GestureDetector(
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                          context: context,
+                          initialDate: _selectedDate,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime.now());
+                      if (picked != null)
+                        setState(() => _selectedDate = picked);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
+                      decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey[300]!),
+                          borderRadius: BorderRadius.circular(12)),
+                      child: Row(
+                        children: [
+                          Icon(Icons.calendar_today_rounded,
+                              size: 20, color: Colors.grey[600]),
+                          const SizedBox(width: 12),
+                          Text(DateFormat('dd/MM/yyyy').format(_selectedDate),
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.bold)),
+                          const Spacer(),
+                          Icon(Icons.keyboard_arrow_down_rounded,
+                              color: Colors.grey[400])
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // 5. CATATAN
+                  Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text("Catatan",
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 16))),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey[300]!),
+                        borderRadius: BorderRadius.circular(12)),
+                    child: TextField(
+                      controller: _noteController,
+                      maxLines: 3,
+                      minLines: 1,
+                      decoration: const InputDecoration(
+                          icon: Icon(Icons.sort_rounded, color: Colors.grey),
+                          hintText: "Tulis deskripsi transaksi...",
+                          border: InputBorder.none),
+                    ),
+                  ),
+
+                  // Kalau ada gambar hasil scan, tampilin kecil
+                  if (widget.initialImage != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.image, size: 16, color: Colors.grey),
+                          const SizedBox(width: 8),
+                          Text("Gambar struk terlampir",
+                              style: TextStyle(
+                                  color: Colors.grey[600], fontSize: 12))
+                        ],
+                      ),
+                    ),
+
+                  const SizedBox(height: 100), // Space bawah
+                ],
+              ),
+            ),
+          ),
+
+          // 6. TOMBOL SIMPAN (Sticky Bottom)
+          Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: SizedBox(
+              width: double.infinity,
+              height: 55,
+              child: ElevatedButton(
+                onPressed: _saveTransaction,
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: _isAmountFilled
+                        ? const Color.fromARGB(
+                            255, 11, 177, 100) // Warna cerah saat amount diisi
+                        : _greenBtnColor, // Warna default saat amount kosong
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    elevation: 0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.check, color: Colors.white),
+                    SizedBox(width: 8),
+                    Text("Simpan Transaksi",
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16)),
+                  ],
+                ),
+              ),
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  // --- WIDGET BUILDERS ---
+
+  Widget _buildToggleButton(String label, bool isActive) {
+    return GestureDetector(
+      onTap: () => setState(() => _isExpense = label == "Pengeluaran"),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: isActive ? _orangeColor : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Center(
+          child: Text(label,
+              style: TextStyle(
+                  color: isActive ? Colors.white : Colors.grey,
+                  fontWeight: FontWeight.bold)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCategoryItem(Map<String, dynamic> cat) {
+    bool isSelected = _selectedCategory == cat['id'];
+    return GestureDetector(
+      onTap: () => setState(() => _selectedCategory = cat['id']),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: isSelected
+                  ? cat['color']
+                  : cat['color']
+                      .withOpacity(0.1), // Selected jadi solid, unselected soft
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(cat['icon'],
+                color: isSelected ? Colors.white : cat['color']),
+          ),
+          const SizedBox(height: 8),
+          Text(cat['id'],
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal))
+        ],
       ),
     );
   }
