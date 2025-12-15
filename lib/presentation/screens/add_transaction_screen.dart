@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart';
 import 'package:intl/intl.dart';
-import 'package:uuid/uuid.dart'; // Buat generate ID unik
+import 'package:uuid/uuid.dart';
 import '../../logic/services/ocr_service.dart';
 import '../../data/local/database_helper.dart';
 
@@ -14,7 +14,6 @@ class AddTransactionScreen extends StatefulWidget {
 }
 
 class _AddTransactionScreenState extends State<AddTransactionScreen> {
-  // --- CONTROLLERS & STATE ---
   final _amountController = TextEditingController();
   final _noteController = TextEditingController();
   final _ocrService = OcrService();
@@ -22,45 +21,60 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   File? _receiptImage;
   bool _isScanning = false;
   DateTime _selectedDate = DateTime.now();
-
-  // Nanti ini diambil dari Database, sementara hardcode dulu sesuai seed data
   String _selectedCategory = 'Makan';
   final List<String> _categories = ['Makan', 'Transport', 'Belanja', 'Gaji'];
 
-  // --- LOGIC: AMBIL GAMBAR & SCAN ---
-  Future<void> _pickImage(ImageSource source) async {
+  // --- LOGIC UTAMA: SCANNER ---
+  Future<void> _scanReceipt() async {
     try {
-      final pickedFile = await ImagePicker().pickImage(source: source);
-      if (pickedFile == null) return;
+      final options = DocumentScannerOptions(
+        documentFormat: DocumentFormat.jpeg,
+        mode: ScannerMode.full,
+        pageLimit: 1,
+        isGalleryImport: true,
+      );
+
+      final scanner = DocumentScanner(options: options);
+      final result = await scanner.scanDocument();
+
+      if (result.images.isEmpty) return;
+
+      final scannedPath = result.images.first;
 
       setState(() {
-        _receiptImage = File(pickedFile.path);
-        _isScanning = true; // Mulai loading
+        _receiptImage = File(scannedPath);
+        _isScanning = true;
       });
 
-      // PANGGIL SERVICE OCR DI SINI
-      final detectedAmount = await _ocrService.scanReceipt(pickedFile.path);
+      // Proses OCR
+      final ocrResult = await _ocrService.scanReceipt(scannedPath);
 
       if (mounted) {
         setState(() {
-          _isScanning = false; // Stop loading
-          if (detectedAmount != null) {
-            // Kalau nemu angka, langsung tempel ke kolom Amount
-            _amountController.text = detectedAmount.toStringAsFixed(0);
+          _isScanning = false;
 
-            // UX: Kasih notif sukses
+          // LANGSUNG ISI TOTAL
+          bool dataFound = false;
+          if (ocrResult.amount != null) {
+            _amountController.text = ocrResult.amount!.toStringAsFixed(0);
+            dataFound = true;
+          }
+
+          // ISI TANGGAL
+          if (ocrResult.date != null) {
+            _selectedDate = ocrResult.date!;
+          }
+
+          if (dataFound) {
+            String msg =
+                "Scan sukses! Rp ${ocrResult.amount?.toStringAsFixed(0) ?? '-'}";
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                    "Dapet bro! Totalnya Rp ${detectedAmount.toStringAsFixed(0)}"),
-                backgroundColor: Colors.green,
-              ),
+              SnackBar(content: Text(msg), backgroundColor: Colors.green),
             );
           } else {
-            // UX: Kasih notif gagal
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text("Waduh, gak nemu totalnya. Isi manual ya bro."),
+                content: Text("Total tidak ditemukan. Pastikan foto jelas."),
                 backgroundColor: Colors.orange,
               ),
             );
@@ -69,11 +83,11 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       }
     } catch (e) {
       setState(() => _isScanning = false);
-      print("Error ambil gambar: $e");
+      print("Error Scan: $e");
     }
   }
 
-  // --- LOGIC: SIMPAN KE DB ---
+  // --- LOGIC SIMPAN (Sama) ---
   Future<void> _saveTransaction() async {
     if (_amountController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -82,33 +96,27 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       return;
     }
 
-    // Siapin data
     final transaction = {
-      'id': const Uuid().v4(), // Generate ID unik
+      'id': const Uuid().v4(),
       'amount': double.parse(_amountController.text),
-      'categoryId': _selectedCategory, // Nanti ini pake ID kategori beneran
+      'categoryId': _selectedCategory,
       'date': _selectedDate.toIso8601String(),
       'note': _noteController.text,
-      'receiptPath': _receiptImage?.path, // Simpan path gambarnya aja
+      'receiptPath': _receiptImage?.path,
     };
 
-    // Panggil Database Helper
     await DatabaseHelper.instance.insert('transactions', transaction);
-
-    if (mounted) {
-      Navigator.pop(context, true); // Balik ke halaman Home & refresh
-    }
+    if (mounted) Navigator.pop(context, true);
   }
 
   @override
   void dispose() {
     _amountController.dispose();
     _noteController.dispose();
-    _ocrService.dispose(); // PENTING: Matikan mata OCR
+    _ocrService.dispose();
     super.dispose();
   }
 
-  // --- UI VIEW ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -118,9 +126,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 1. AREA FOTO STRUK
             GestureDetector(
-              onTap: () => _showPickerOptions(context),
+              onTap: _scanReceipt,
               child: Container(
                 height: 200,
                 decoration: BoxDecoration(
@@ -129,29 +136,27 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   border: Border.all(color: Colors.grey[400]!),
                   image: _receiptImage != null
                       ? DecorationImage(
-                          image: FileImage(_receiptImage!), fit: BoxFit.cover)
+                          image: FileImage(_receiptImage!), fit: BoxFit.contain)
                       : null,
                 ),
                 child: _isScanning
-                    ? const Center(
-                        child: CircularProgressIndicator()) // Loading pas scan
+                    ? const Center(child: CircularProgressIndicator())
                     : _receiptImage == null
                         ? const Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.camera_alt,
-                                  size: 50, color: Colors.grey),
-                              Text("Tap buat Scan Struk",
-                                  style: TextStyle(color: Colors.grey)),
+                              Icon(Icons.document_scanner_rounded,
+                                  size: 50, color: Colors.blue),
+                              Text("Tap buat Scan Otomatis",
+                                  style: TextStyle(
+                                      color: Colors.blue,
+                                      fontWeight: FontWeight.bold)),
                             ],
                           )
                         : null,
               ),
             ),
             const SizedBox(height: 20),
-
-            // 2. FORM INPUT
-            // Amount Field
             TextField(
               controller: _amountController,
               keyboardType: TextInputType.number,
@@ -164,8 +169,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
-
-            // Category Dropdown
             DropdownButtonFormField<String>(
               value: _selectedCategory,
               items: _categories.map((cat) {
@@ -173,24 +176,17 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               }).toList(),
               onChanged: (val) => setState(() => _selectedCategory = val!),
               decoration: const InputDecoration(
-                labelText: "Kategori",
-                border: OutlineInputBorder(),
-              ),
+                  labelText: "Kategori", border: OutlineInputBorder()),
             ),
             const SizedBox(height: 16),
-
-            // Note Field
             TextField(
               controller: _noteController,
               decoration: const InputDecoration(
-                labelText: "Catatan (Opsional)",
-                border: OutlineInputBorder(),
-                icon: Icon(Icons.note),
-              ),
+                  labelText: "Catatan (Opsional)",
+                  border: OutlineInputBorder(),
+                  icon: Icon(Icons.note)),
             ),
             const SizedBox(height: 16),
-
-            // Date Picker
             ListTile(
               contentPadding: EdgeInsets.zero,
               title: Text(
@@ -206,10 +202,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 if (picked != null) setState(() => _selectedDate = picked);
               },
             ),
-
             const SizedBox(height: 30),
-
-            // 3. TOMBOL SIMPAN
             ElevatedButton(
               onPressed: _saveTransaction,
               style: ElevatedButton.styleFrom(
@@ -223,37 +216,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           ],
         ),
       ),
-    );
-  }
-
-  // Modal Bawah buat pilih Kamera/Galeri
-  void _showPickerOptions(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) {
-        return SafeArea(
-          child: Wrap(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.photo_library),
-                title: const Text('Ambil dari Galeri'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickImage(ImageSource.gallery);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.camera_alt),
-                title: const Text('Foto Kamera'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickImage(ImageSource.camera);
-                },
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

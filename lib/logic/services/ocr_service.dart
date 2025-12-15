@@ -1,131 +1,154 @@
 import 'dart:io';
+import 'dart:math'; 
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+
+class ReceiptResult {
+  final double? amount; // THE ONE AND ONLY (Pemenang tunggal)
+  final DateTime? date;
+
+  ReceiptResult({this.amount, this.date});
+}
 
 class OcrService {
   final _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
-  Future<double?> scanReceipt(String imagePath) async {
+  Future<ReceiptResult> scanReceipt(String imagePath) async {
     try {
       final inputImage = InputImage.fromFile(File(imagePath));
       final recognizedText = await _textRecognizer.processImage(inputImage);
-      return _parseTotalAmount(recognizedText);
+      return _processText(recognizedText);
     } catch (e) {
       print("Error OCR: $e");
-      return null;
+      return ReceiptResult();
     }
   }
 
-  double? _parseTotalAmount(RecognizedText text) {
-    List<String> lines = [];
-
-    // 1. Ratakan teks jadi list baris
+  ReceiptResult _processText(RecognizedText text) {
+    List<TextLine> allLines = [];
     for (var block in text.blocks) {
-      for (var line in block.lines) {
-        lines.add(line.text);
+      allLines.addAll(block.lines);
+    }
+    // Sortir visual dari atas ke bawah
+    allLines.sort((a, b) => a.boundingBox.top.compareTo(b.boundingBox.top));
+
+    List<String> stringLines = allLines.map((e) => e.text).toList();
+    DateTime? date = _findDate(stringLines);
+
+    double? finalAmount;
+
+    // --- TAHAP 1: CARI LABEL "TOTAL" (METODE PALING AKURAT) ---
+    // Kita cari angka yang nempel sama tulisan Total. Kalau ketemu, LANGSUNG AMBIL.
+    // Kita abaikan angka-angka lain yang bertebaran di struk.
+    List<double> highConfidenceMatches = [];
+
+    for (var line in allLines) {
+      if (_isTotalLabelFuzzy(line.text)) {
+        double? val = _findPriceByPosition(line, allLines);
+        if (val != null) highConfidenceMatches.add(val);
       }
     }
 
-    // --- LEVEL 1: STRATEGI SNIPER (Cari Label "Total") ---
-    // Cari baris yang JELAS ada tulisan Total/Jumlah/Bayar
-    for (int i = 0; i < lines.length; i++) {
-      if (_isTotalLabel(lines[i])) {
-        // Cek baris ini
-        double? amount = _extractPriceFromLine(lines[i]);
-        if (amount != null) return amount;
+    if (highConfidenceMatches.isNotEmpty) {
+      // Kalau ada beberapa kandidat (misal Total & Grand Total), ambil yang TERBESAR.
+      highConfidenceMatches.sort((a, b) => b.compareTo(a));
+      finalAmount = highConfidenceMatches.first;
+    } else {
+      // --- TAHAP 2: SAPU JAGAT (BACKUP PLAN) ---
+      // Jalan hanya kalau Tahap 1 GAGAL TOTAL (gak nemu tulisan 'Total').
+      // Kita cari angka terbesar yang valid di seluruh struk.
+      List<double> allNumbers = [];
+      for (var line in allLines) {
+        String textContent = line.text;
+        if (_isForbiddenLineFuzzy(textContent)) continue;
 
-        // Cek baris bawahnya (karena kadang layoutnya: Total [enter] Rp 50.000)
-        if (i + 1 < lines.length) {
-          double? nextAmount = _extractPriceFromLine(lines[i + 1]);
-          if (nextAmount != null) return nextAmount;
+        double? val = _extractPriceFromLine(textContent);
+        if (val != null && val >= 1000 && val < 50000000) {
+           if (val >= 2019 && val <= 2030) continue; // Filter tahun
+           allNumbers.add(val);
         }
       }
-    }
 
-    // --- LEVEL 2: STRATEGI SAPU JAGAT (Cari Angka Terbesar) ---
-    // Kalau Sniper gagal, kita cari angka terbesar TAPI dengan filter super ketat
-    double maxAmount = 0;
-
-    for (String line in lines) {
-      // FILTER MAUT: Kalau baris ini bau-bau tanggal/hp/member, BUANG.
-      if (_isForbiddenLine(line)) continue;
-
-      double? amount = _extractPriceFromLine(line);
-      if (amount != null) {
-        // Validasi Logika:
-        // 1. Minimal 500 perak (masa belanja 11 perak)
-        // 2. Maksimal 20 Juta (Biar 19-05-2017 gak masuk sbg 19jt)
-        if (amount > 500 && amount < 20000000) {
-          if (amount > maxAmount) {
-            maxAmount = amount;
-          }
-        }
+      if (allNumbers.isNotEmpty) {
+        allNumbers.sort((a, b) => b.compareTo(a));
+        finalAmount = allNumbers.first;
       }
     }
 
-    return maxAmount > 0 ? maxAmount : null;
+    return ReceiptResult(
+      amount: finalAmount,
+      date: date,
+    );
   }
 
-  // --- CEK LABEL TOTAL ---
-  bool _isTotalLabel(String line) {
-    String lower = line.toLowerCase();
+  // --- LOGIC POSISI (SAMA SEPERTI SEBELUMNYA) ---
+  double? _findPriceByPosition(TextLine labelLine, List<TextLine> allLines) {
+    final labelRect = labelLine.boundingBox;
+    double? candidatePrice;
+    double minDistance = double.infinity;
 
-    // Harus ada kata kunci sakti
-    bool hasKeyword = lower.contains('total') ||
-        lower.contains('jumlah') ||
-        lower.contains('item') ||
-        lower.contains('bayar') ||
-        lower.contains('tagihan') ||
-        lower.contains('grand');
+    for (var otherLine in allLines) {
+      if (otherLine == labelLine) continue;
+      if (_isForbiddenLineFuzzy(otherLine.text)) continue;
 
-    // Tapi GAK BOLEH ada kata "Subtotal" atau "Diskon" (Kita mau bayaran akhir)
-    bool isTrap = lower.contains('subtotal') ||
-        lower.contains('sub-total') ||
-        lower.contains('diskon') ||
-        lower.contains('diskon') ||
-        lower.contains('tunai') ||
-        lower.contains('cash') ||
-        lower.contains('discount');
+      final otherRect = otherLine.boundingBox;
 
+      // 1. Cek Kanan (Satu Baris)
+      double verticalOverlap = max(0, min(labelRect.bottom, otherRect.bottom) - max(labelRect.top, otherRect.top));
+      bool isSameRow = verticalOverlap > (labelRect.height * 0.5);
+      bool isToTheRight = otherRect.left > labelRect.left; 
+
+      // 2. Cek Bawah (Baris Berikutnya)
+      bool isBelow = otherRect.top >= labelRect.bottom && 
+                     otherRect.top <= (labelRect.bottom + labelRect.height * 3);
+      bool isAligned = (otherRect.left >= labelRect.left - 100) && 
+                       (otherRect.right <= labelRect.right + 200);
+
+      if ((isSameRow && isToTheRight) || (isBelow && isAligned)) {
+        double? extracted = _extractPriceFromLine(otherLine.text);
+        if (extracted != null) {
+           // Cari yang jaraknya paling dekat
+           double distance = (otherRect.left - labelRect.right).abs() + (otherRect.top - labelRect.top).abs();
+           if (distance < minDistance) {
+             minDistance = distance;
+             candidatePrice = extracted;
+           }
+        }
+      }
+    }
+    return candidatePrice;
+  }
+
+  // --- FUZZY & BLACKLIST (SAMA) ---
+  bool _isTotalLabelFuzzy(String line) {
+    bool hasKeyword = _fuzzyContains(line, ['total', 'jumlah', 'bayar', 'grand', 'tagihan', 'belanja']);
+    bool isTrap = _fuzzyContains(line, ['subtotal', 'diskon', 'disc', 'tax', 'pajak', 'ppn', 'dpp', 'item']);
     return hasKeyword && !isTrap;
   }
 
-  // --- BLACKLIST BARIS (THE KILLER) ---
-  bool _isForbiddenLine(String line) {
+  bool _isForbiddenLineFuzzy(String line) {
+    bool isBlacklisted = _fuzzyContains(line, [
+      'kembalian', 'change', 'kritik', 'saran', 'diskon', 'disc',
+      'ppn', 'dpp', 'pajak', 'tax', 'npwp', 'whatsapp', 
+    ]);
+    if (isBlacklisted) return true;
+
     String lower = line.toLowerCase();
+    if (lower.contains(' sms ') || lower.startsWith('sms')) return true;
+    if (lower.contains(' member ') || lower.startsWith('member')) return true;
+    if (lower.contains(' kembali ') || lower.startsWith('kembali')) return true;
+    if (lower.contains(' tunai ') || lower.startsWith('tunai')) return true;
+    if (lower.contains(' total item')) return true;
+    if (lower.contains(':')) return true;
+    if (lower.startsWith('v.') || lower.startsWith('ver ') || lower.contains('version')) return true;
+    if (lower.contains(' wa ') || lower.contains('wa:') || lower.startsWith('wa')) return true;
+    
+    bool hasTunai = _fuzzyContains(line, ['tunai', 'cash']);
+    bool hasTotal = _fuzzyContains(line, ['total', 'jumlah', 'grand']);
+    if (hasTunai && !hasTotal) return true;
 
-    // 1. Blacklist Kata Kunci (Kalau ada ini, skip satu baris!)
-    // 'tgl'/'date' -> Biar gak ambil tanggal struk (19-05-2017)
-    // 'telp'/'sms'/'fax'/'call' -> Biar gak ambil no HP
-    // 'member'/'id' -> Biar gak ambil ID member
-    if (lower.contains('tgl') ||
-        lower.contains('tanggal') ||
-        lower.contains('date') ||
-        lower.contains('telp') ||
-        lower.contains('sms') ||
-        lower.contains('hp') ||
-        lower.contains('fax') ||
-        lower.contains('call') ||
-        lower.contains('hub') ||
-        lower.contains('poin') ||
-        lower.contains('care') || // Customer Care
-        lower.contains('member') ||
-        lower.contains('tunai') ||
-        lower.contains('cash') ||
-        lower.contains('-') ||
-        lower.contains(':') ||
-        lower.contains('kembalian') ||
-        lower.contains('kritik') ||
-        lower.contains('saran') ||
-        lower.contains('kembali')) {
-      return true;
-    }
+    if (_fuzzyContains(line, ['telp', 'phone', 'hubungi'])) return true;
+    if (lower.contains('tgl') || lower.contains('date')) return true; 
 
-    // 2. Blacklist Regex Tanggal (XX-XX-XXXX)
-    if (RegExp(r'\d{1,2}[- /.]\d{1,2}[- /.]\d{2,4}').hasMatch(line))
-      return true;
-
-    // 3. Blacklist Regex No HP (08xx...)
-    // Hapus spasi dan simbol biar deteksinya gampang
     String clean = line.replaceAll(RegExp(r'[^0-9]'), '');
     if (clean.startsWith('08') && clean.length >= 10) return true;
     if (clean.startsWith('628') && clean.length >= 11) return true;
@@ -133,51 +156,83 @@ class OcrService {
     return false;
   }
 
-  double? _extractPriceFromLine(String line) {
-    // Bersih-bersih
-    String cleanLine = line
-        .toUpperCase()
-        .replaceAll('RP', '')
-        .replaceAll('IDR', '')
-        .replaceAll('O', '0')
-        .replaceAll('L', '1');
-
-    // Pecah jadi kata
-    List<String> words = cleanLine.split(' ');
-
-    // Cari dari KANAN (Harga biasanya di kanan)
-    for (var word in words.reversed) {
-      // Bersihkan simbol mata uang, sisa angka, titik, koma
-      String candidate = word.replaceAll(RegExp(r'[^0-9.,]'), '');
-
-      if (candidate.isNotEmpty) {
-        // Cek Digit Murni:
-        // Harus minimal 3 digit (Ratusan). "1" dibuang.
-        String justDigits = candidate.replaceAll('.', '').replaceAll(',', '');
-        if (justDigits.length < 3) continue;
-
-        double? amount = _parseToDouble(candidate);
-        if (amount != null) return amount;
+  bool _fuzzyContains(String line, List<String> keywords) {
+    List<String> wordsInLine = line.toLowerCase().replaceAll(RegExp(r'[^a-z\s]'), '').split(RegExp(r'\s+'));             
+    for (String word in wordsInLine) {
+      if (word.isEmpty) continue;
+      for (String key in keywords) {
+        if (key.length <= 3) {
+           if (word == key) return true;
+        } else {
+           int maxEdits = key.length > 6 ? 2 : 1;
+           if (_levenshtein(word, key) <= maxEdits) return true;
+        }
       }
+    }
+    return false;
+  }
+
+  int _levenshtein(String s, String t) {
+    if (s == t) return 0;
+    if (s.isEmpty) return t.length;
+    if (t.isEmpty) return s.length;
+    List<int> v0 = List<int>.generate(t.length + 1, (i) => i);
+    List<int> v1 = List<int>.filled(t.length + 1, 0);
+    for (int i = 0; i < s.length; i++) {
+      v1[0] = i + 1;
+      for (int j = 0; j < t.length; j++) {
+        int cost = (s.codeUnitAt(i) == t.codeUnitAt(j)) ? 0 : 1;
+        v1[j + 1] = min(v1[j] + 1, min(v0[j + 1] + 1, v0[j] + cost));
+      }
+      for (int j = 0; j <= t.length; j++) v0[j] = v1[j];
+    }
+    return v1[t.length];
+  }
+
+  double? _extractPriceFromLine(String line) {
+    String cleanLine = line.toUpperCase().replaceAll('RP', '').replaceAll('IDR', '').replaceAll('O', '0').replaceAll('L', '1');
+    List<String> words = cleanLine.split(' ');
+    for (var word in words.reversed) {
+      String numberStr = word.replaceAll(RegExp(r'[^0-9.,]'), '');
+      if (numberStr.length < 3) continue;
+      try {
+        if (numberStr.indexOf('.') != numberStr.lastIndexOf('.')) {
+             List<String> parts = numberStr.split('.');
+             for (int i = 1; i < parts.length - 1; i++) {
+               if (parts[i].length != 3) throw Exception("Bukan format harga");
+             }
+        }
+        if (numberStr.contains(',') && numberStr.lastIndexOf(',') > numberStr.length - 4) {
+          numberStr = numberStr.replaceAll('.', '').replaceAll(',', '.');
+        } else {
+          numberStr = numberStr.replaceAll('.', '').replaceAll(',', '');
+        }
+        return double.parse(numberStr);
+      } catch (e) { continue; }
     }
     return null;
   }
 
-  double? _parseToDouble(String rawNumber) {
-    try {
-      String clean = rawNumber;
-      // Logic Rupiah: Titik=Ribuan, Koma=Desimal
-      // Kecuali kalau koma ada di akhir banget (cth: ,00), baru dianggap desimal
-      if (clean.contains(',') && clean.lastIndexOf(',') > clean.length - 4) {
-        clean = clean.replaceAll('.', '');
-        clean = clean.replaceAll(',', '.');
-      } else {
-        clean = clean.replaceAll('.', '').replaceAll(',', '');
+  DateTime? _findDate(List<String> lines) {
+    final dateRegex = RegExp(r'\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b|\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b');
+    for (String line in lines) {
+      final match = dateRegex.firstMatch(line);
+      if (match != null) {
+        try {
+          String dateStr = match.group(0)!.replaceAll('/', '-').replaceAll('.', '-');
+          List<String> parts = dateStr.split('-');
+          int d, m, y;
+          if (parts[0].length == 4) {
+            y = int.parse(parts[0]); m = int.parse(parts[1]); d = int.parse(parts[2]);
+          } else {
+            d = int.parse(parts[0]); m = int.parse(parts[1]); y = int.parse(parts[2]);
+            if (y < 100) y += 2000;
+          }
+          return DateTime(y, m, d);
+        } catch (e) { continue; }
       }
-      return double.parse(clean);
-    } catch (e) {
-      return null;
     }
+    return null;
   }
 
   void dispose() {
