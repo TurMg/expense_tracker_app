@@ -7,7 +7,9 @@ import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart
 import '../../data/local/database_helper.dart';
 import '../../logic/services/ocr_service.dart';
 import 'add_transaction_screen.dart'; // Halaman Manual
+import 'history_screen.dart'; // Halaman Riwayat
 import 'scan_result_screen.dart'; // Halaman Review Scan (File Baru)
+import '../widgets/bottom_navbar.dart'; // Bottom navbar global
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -22,6 +24,7 @@ class _HomeScreenState extends State<HomeScreen> {
   double _totalIncome = 0;
   List<Map<String, dynamic>> _transactions = [];
   bool _isLoading = true;
+  int _currentIndex = 0; // Untuk bottom navbar
 
   // Service OCR
   final _ocrService = OcrService();
@@ -85,6 +88,31 @@ class _HomeScreenState extends State<HomeScreen> {
       _totalIncome = totalIncome;
       _isLoading = false;
     });
+
+  }
+
+  // --- LOGIC: NAVIGASI BOTTOM NAVBAR ---
+  void _onTabChanged(int index) {
+    setState(() {
+      _currentIndex = index;
+    });
+    
+    // Navigasi ke screen yang sesuai berdasarkan index
+    if (index == 2) { // Riwayat
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const HistoryScreen(),
+        ),
+      );
+      // Kembali ke index 0 setelah navigasi
+      Future.delayed(Duration.zero, () {
+        setState(() {
+          _currentIndex = 0;
+        });
+      });
+    }
+    // Tambahkan navigasi untuk tab lain jika diperlukan
   }
 
   // --- LOGIC: SCANNER FLOW ---
@@ -240,56 +268,53 @@ class _HomeScreenState extends State<HomeScreen> {
       body: SafeArea(
         child: _isLoading
             ? const Center(child: CircularProgressIndicator())
-            : Stack(
+            : Column(
                 children: [
+                  // HEADER (Tidak Scroll)
+                  Container(
+                    padding: const EdgeInsets.all(24.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text("Selamat Pagi,",
+                                style: GoogleFonts.poppins(
+                                    color: Colors.grey[600], fontSize: 14)),
+                            const SizedBox(height: 4),
+                            Row(
+                              children: [
+                                Text("Halo, Budi",
+                                    style: GoogleFonts.poppins(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 20)),
+                                const SizedBox(width: 8),
+                                const Text("👋",
+                                    style: TextStyle(fontSize: 20)),
+                              ],
+                            ),
+                          ],
+                        ),
+                        CircleAvatar(
+                          backgroundColor: Colors.white,
+                          child: IconButton(
+                            icon: const Icon(Icons.notifications_none_rounded,
+                                color: Colors.black87),
+                            onPressed: () {},
+                          ),
+                        )
+                      ],
+                    ),
+                  ),
+
                   // CONTENT UTAMA (Scrollable)
-                  SingleChildScrollView(
-                    padding: const EdgeInsets.only(
-                        bottom: 100), // Space buat BottomNav
-                    child: Padding(
-                      padding: const EdgeInsets.all(24.0),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // 1. HEADER
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text("Selamat Pagi,",
-                                      style: GoogleFonts.poppins(
-                                          color: Colors.grey[600],
-                                          fontSize: 14)),
-                                  const SizedBox(height: 4),
-                                  Row(
-                                    children: [
-                                      Text("Halo, Budi",
-                                          style: GoogleFonts.poppins(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 20)),
-                                      const SizedBox(width: 8),
-                                      const Text("👋",
-                                          style: TextStyle(fontSize: 20)),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                              CircleAvatar(
-                                backgroundColor: Colors.white,
-                                child: IconButton(
-                                  icon: const Icon(
-                                      Icons.notifications_none_rounded,
-                                      color: Colors.black87),
-                                  onPressed: () {},
-                                ),
-                              )
-                            ],
-                          ),
-
-                          const SizedBox(height: 24),
-
                           // 2. KARTU SALDO (Gradient)
                           Container(
                             width: double.infinity,
@@ -377,7 +402,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ],
                           ),
 
-                          const SizedBox(height: 24),
+                          const SizedBox(height: 40),
 
                           // 4. CHART RINGKASAN
                           Container(
@@ -412,7 +437,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     )
                                   ],
                                 ),
-                                const SizedBox(height: 24),
+                                const SizedBox(height: 40),
                                 Column(
                                   children: [
                                     // CHART DAN LEGEND DALAM ROW YANG DIKELILINGI CENTER
@@ -489,7 +514,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                       fontWeight: FontWeight.bold,
                                       fontSize: 16)),
                               TextButton(
-                                  onPressed: () {},
+                                  onPressed: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => const HistoryScreen(),
+                                      ),
+                                    );
+                                  },
                                   child: Text("Lihat Semua",
                                       style: GoogleFonts.poppins(
                                           color: const Color(0xFF5CA6E9))))
@@ -501,53 +533,14 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
-
-                  // CUSTOM BOTTOM NAVIGATION BAR
-                  Align(
-                    alignment: Alignment.bottomCenter,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 24, vertical: 16),
-                      decoration: const BoxDecoration(
-                          color: Colors.white,
-                          border: Border(
-                              top: BorderSide(color: Color(0xFFF1F1F1)))),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          _buildNavItem(Icons.home_rounded, "Beranda", true),
-                          _buildNavItem(
-                              Icons.bar_chart_rounded, "Statistik", false),
-
-                          // --- TOMBOL TAMBAH (+) DI TENGAH ---
-                          GestureDetector(
-                            onTap: _showAddOptions, // MUNCULKAN POPUP PILIHAN
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: const BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Color(0xFF5CA6E9),
-                                  boxShadow: [
-                                    BoxShadow(
-                                        color: Color(0x445CA6E9),
-                                        blurRadius: 10,
-                                        offset: Offset(0, 5))
-                                  ]),
-                              child: const Icon(Icons.add,
-                                  color: Colors.white, size: 28),
-                            ),
-                          ),
-                          // -----------------------------------
-
-                          _buildNavItem(Icons.account_balance_wallet_rounded,
-                              "Dompet", false),
-                          _buildNavItem(Icons.person_rounded, "Profil", false),
-                        ],
-                      ),
-                    ),
-                  )
                 ],
               ),
+      ),
+      // Tambahkan bottom navbar global
+      bottomNavigationBar: GlobalBottomNavBar(
+        currentIndex: _currentIndex,
+        onTabChanged: _onTabChanged,
+        onAddPressed: _showAddOptions,
       ),
     );
   }
@@ -635,22 +628,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
           ],
         )
-      ],
-    );
-  }
-
-  Widget _buildNavItem(IconData icon, String label, bool isActive) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon,
-            color: isActive ? const Color(0xFF5CA6E9) : Colors.grey[400]),
-        const SizedBox(height: 4),
-        Text(label,
-            style: GoogleFonts.poppins(
-                fontSize: 10,
-                color: isActive ? const Color(0xFF5CA6E9) : Colors.grey[400],
-                fontWeight: isActive ? FontWeight.bold : FontWeight.normal))
       ],
     );
   }
