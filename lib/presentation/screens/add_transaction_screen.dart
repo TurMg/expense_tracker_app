@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import '../../data/local/database_helper.dart';
+import '../../logic/services/category_service.dart';
 
 class AddTransactionScreen extends StatefulWidget {
   // Parameter Opsional (Diisi kalau hasil Scan, Kosong kalau Manual)
@@ -23,7 +24,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   late TextEditingController _noteController;
 
   DateTime _selectedDate = DateTime.now();
-  String _selectedCategory = 'Makan'; // Default
+  String _selectedCategory = ''; // Akan diisi dengan kategori dinamis
   bool _isExpense = true; // Toggle Pengeluaran/Pemasukan
   bool _isAmountFilled = false; // Untuk track apakah amount sudah diisi
 
@@ -34,28 +35,12 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       const Color(0xFF98D1B6); // Warna Hijau Tombol Simpan
   final Color _textAmountColor = const Color(0xFFF4A285);
 
-  final List<Map<String, dynamic>> _categories = [
-    {
-      'id': 'Makan',
-      'icon': Icons.restaurant_rounded,
-      'color': Color(0xFFF4A285)
-    },
-    {
-      'id': 'Transport',
-      'icon': Icons.directions_bus_rounded,
-      'color': Color(0xFF81C784)
-    },
-    {
-      'id': 'Belanja',
-      'icon': Icons.shopping_bag_rounded,
-      'color': Color(0xFF64B5F6)
-    },
-    {
-      'id': 'Tagihan',
-      'icon': Icons.receipt_long_rounded,
-      'color': Color(0xFFE57373)
-    },
-  ];
+  final Color _greenIncomeActive = const Color(0xFF4CAF50); 
+
+  List<Map<String, dynamic>> _expenseCategories = [];
+  List<Map<String, dynamic>> _incomeCategories = [];
+  final CategoryService _categoryService = CategoryService();
+  bool _isLoadingCategories = true;
 
   @override
   void initState() {
@@ -71,6 +56,50 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       _selectedDate = widget.initialDate!;
     }
     _noteController = TextEditingController();
+    _loadCategories();
+  }
+
+  // Load kategori dari database
+  Future<void> _loadCategories() async {
+    try {
+      final expenseCats = await _categoryService.getCategoriesByType('EXPENSE');
+      final incomeCats = await _categoryService.getCategoriesByType('INCOME');
+
+      setState(() {
+        _expenseCategories = expenseCats
+            .map((cat) => {
+                  'id': cat.id,
+                  'name': cat.name,
+                  'icon': cat.icon,
+                  'color': cat.color,
+                })
+            .toList();
+
+        _incomeCategories = incomeCats
+            .map((cat) => {
+                  'id': cat.id,
+                  'name': cat.name,
+                  'icon': cat.icon,
+                  'color': cat.color,
+                })
+            .toList();
+
+        _isLoadingCategories = false;
+
+        // Set default category jika selected category kosong atau tidak ada di list
+        final currentCategories =
+            _isExpense ? _expenseCategories : _incomeCategories;
+        if (_selectedCategory.isEmpty ||
+            !currentCategories.any((cat) => cat['id'] == _selectedCategory)) {
+          if (currentCategories.isNotEmpty) {
+            _selectedCategory = currentCategories.first['id'];
+          }
+        }
+      });
+    } catch (e) {
+      print('Error loading categories: $e');
+      setState(() => _isLoadingCategories = false);
+    }
   }
 
   @override
@@ -200,7 +229,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                       }
                       // Update state untuk warna tombol
                       setState(() {
-                        _isAmountFilled = formatted.isNotEmpty && formatted != '0';
+                        _isAmountFilled =
+                            formatted.isNotEmpty && formatted != '0';
                       });
                     },
                   ),
@@ -222,12 +252,16 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                     ],
                   ),
                   const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: _categories
-                        .map((cat) => _buildCategoryItem(cat))
-                        .toList(),
-                  ),
+                  _isLoadingCategories
+                      ? const CircularProgressIndicator()
+                      : Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: (_isExpense
+                                  ? _expenseCategories
+                                  : _incomeCategories)
+                              .map((cat) => _buildCategoryItem(cat))
+                              .toList(),
+                        ),
 
                   const SizedBox(height: 30),
 
@@ -357,11 +391,23 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
   Widget _buildToggleButton(String label, bool isActive) {
     return GestureDetector(
-      onTap: () => setState(() => _isExpense = label == "Pengeluaran"),
+      onTap: () {
+        setState(() {
+          _isExpense = label == "Pengeluaran";
+          // Reset kategori ke default berdasarkan jenis transaksi
+          final categories =
+              _isExpense ? _expenseCategories : _incomeCategories;
+          if (categories.isNotEmpty) {
+            _selectedCategory = categories.first['id'];
+          }
+        });
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: isActive ? _orangeColor : Colors.transparent,
+          color: isActive
+              ? (label == "Pengeluaran" ? _orangeColor : _greenIncomeActive)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
         ),
         child: Center(
@@ -385,15 +431,15 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             decoration: BoxDecoration(
               color: isSelected
                   ? cat['color']
-                  : cat['color']
+                  : (cat['color'] as Color)
                       .withOpacity(0.1), // Selected jadi solid, unselected soft
               borderRadius: BorderRadius.circular(16),
             ),
-            child: Icon(cat['icon'],
+            child: Icon(cat['icon'] as IconData,
                 color: isSelected ? Colors.white : cat['color']),
           ),
           const SizedBox(height: 8),
-          Text(cat['id'],
+          Text(cat['name'],
               style: TextStyle(
                   fontSize: 12,
                   fontWeight: isSelected ? FontWeight.bold : FontWeight.normal))

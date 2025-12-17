@@ -5,7 +5,9 @@ import 'package:google_fonts/google_fonts.dart'; // Font Poppins
 import 'package:intl/intl.dart'; // Formatter
 import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart'; // Scanner
 import '../../data/local/database_helper.dart';
+import '../../data/models/category_model.dart'; // Model kategori
 import '../../logic/services/ocr_service.dart';
+import '../../logic/services/category_service.dart'; // Service kategori dinamis
 import 'add_transaction_screen.dart'; // Halaman Manual
 import 'history_screen.dart'; // Halaman Riwayat
 import 'scan_result_screen.dart'; // Halaman Review Scan (File Baru)
@@ -23,35 +25,15 @@ class _HomeScreenState extends State<HomeScreen> {
   double _totalExpense = 0;
   double _totalIncome = 0;
   List<Map<String, dynamic>> _transactions = [];
+  List<Map<String, dynamic>> _allTransactions = []; // Semua transaksi untuk filter cepat
+  List<Category> _categories = []; // Kategori dinamis
   bool _isLoading = true;
   int _currentIndex = 0; // Untuk bottom navbar
+  String _activeFilter = "Mingguan"; // Filter aktif: Harian, Mingguan, Bulanan
 
   // Service OCR
   final _ocrService = OcrService();
-
-  // Data Kategori (Sama dengan AddTransactionScreen)
-  final List<Map<String, dynamic>> _categories = [
-    {
-      'id': 'Makan',
-      'icon': Icons.restaurant_rounded,
-      'color': Color(0xFFF4A285)
-    },
-    {
-      'id': 'Transport',
-      'icon': Icons.directions_bus_rounded,
-      'color': Color(0xFF81C784)
-    },
-    {
-      'id': 'Belanja',
-      'icon': Icons.shopping_bag_rounded,
-      'color': Color(0xFF64B5F6)
-    },
-    {
-      'id': 'Tagihan',
-      'icon': Icons.receipt_long_rounded,
-      'color': Color(0xFFE57373)
-    },
-  ];
+  final _categoryService = CategoryService(); // Service kategori dinamis
 
   // Getter Saldo Saat Ini
   double get _currentBalance => _totalIncome - _totalExpense;
@@ -65,12 +47,18 @@ class _HomeScreenState extends State<HomeScreen> {
   // --- LOGIC: LOAD DATA DARI DB ---
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
+
+    // Load transactions
     final data = await DatabaseHelper.instance.getAll('transactions');
+    _allTransactions = data; // Simpan semua data
+
+    // Filter transactions berdasarkan periode aktif
+    final filteredData = _filterTransactionsByPeriod(data, _activeFilter);
 
     double totalExpense = 0;
     double totalIncome = 0;
     // Sort dari yang terbaru
-    List<Map<String, dynamic>> sortedData = List.from(data);
+    List<Map<String, dynamic>> sortedData = List.from(filteredData);
     sortedData.sort((a, b) =>
         DateTime.parse(b['date']).compareTo(DateTime.parse(a['date'])));
 
@@ -82,13 +70,16 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
+    // Load categories
+    final categories = await _categoryService.getAllCategories();
+
     setState(() {
       _transactions = sortedData;
       _totalExpense = totalExpense;
       _totalIncome = totalIncome;
+      _categories = categories;
       _isLoading = false;
     });
-
   }
 
   // --- LOGIC: NAVIGASI BOTTOM NAVBAR ---
@@ -96,9 +87,10 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _currentIndex = index;
     });
-    
+
     // Navigasi ke screen yang sesuai berdasarkan index
-    if (index == 2) { // Riwayat
+    if (index == 2) {
+      // Riwayat
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -113,6 +105,66 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     }
     // Tambahkan navigasi untuk tab lain jika diperlukan
+  }
+
+  // --- LOGIC: FILTER PERUBAHAN ---
+  void _onFilterChanged(String filter) {
+    _applyFilter(filter);
+  }
+
+  // --- LOGIC: APLIKASI FILTER CEPAT ---
+  void _applyFilter(String filter) {
+    // Filter dari data yang sudah ada
+    final filteredData = _filterTransactionsByPeriod(_allTransactions, filter);
+
+    double totalExpense = 0;
+    double totalIncome = 0;
+    // Sort dari yang terbaru
+    List<Map<String, dynamic>> sortedData = List.from(filteredData);
+    sortedData.sort((a, b) =>
+        DateTime.parse(b['date']).compareTo(DateTime.parse(a['date'])));
+
+    for (var item in sortedData) {
+      if (item['type'] == 'EXPENSE') {
+        totalExpense += (item['amount'] as double);
+      } else if (item['type'] == 'INCOME') {
+        totalIncome += (item['amount'] as double);
+      }
+    }
+
+    setState(() {
+      _activeFilter = filter;
+      _transactions = sortedData;
+      _totalExpense = totalExpense;
+      _totalIncome = totalIncome;
+    });
+  }
+
+  // --- LOGIC: FILTER DATA BERDASARKAN PERIODE ---
+  List<Map<String, dynamic>> _filterTransactionsByPeriod(
+      List<Map<String, dynamic>> transactions, String period) {
+    final now = DateTime.now();
+    final filteredTransactions = transactions.where((transaction) {
+      final date = DateTime.parse(transaction['date']);
+
+      switch (period) {
+        case "Harian":
+          return date.year == now.year &&
+              date.month == now.month &&
+              date.day == now.day;
+        case "Mingguan":
+          final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+          final endOfWeek = startOfWeek.add(const Duration(days: 6));
+          return date.isAfter(startOfWeek.subtract(const Duration(days: 1))) &&
+              date.isBefore(endOfWeek.add(const Duration(days: 1)));
+        case "Bulanan":
+          return date.year == now.year && date.month == now.month;
+        default:
+          return true;
+      }
+    }).toList();
+
+    return filteredTransactions;
   }
 
   // --- LOGIC: SCANNER FLOW ---
@@ -385,7 +437,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               Expanded(
                                 child: _buildActionButton(
                                   label: "Pemasukan",
-                                  icon: Icons.arrow_downward_rounded,
+                                  icon: Icons.arrow_downward_sharp,
                                   bgColor: greenSoft,
                                   iconColor: greenText,
                                 ),
@@ -394,7 +446,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               Expanded(
                                 child: _buildActionButton(
                                   label: "Pengeluaran",
-                                  icon: Icons.arrow_upward_rounded,
+                                  icon: Icons.arrow_upward_sharp,
                                   bgColor: orangeSoft,
                                   iconColor: orangeText,
                                 ),
@@ -428,16 +480,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                               BorderRadius.circular(12)),
                                       child: Row(
                                         children: [
-                                          _buildTab("Harian", false),
-                                          _buildTab(
-                                              "Mingguan", true), // Selected
-                                          _buildTab("Bulanan", false),
+                                          _buildTab("Harian",
+                                              _activeFilter == "Harian",
+                                              () => _onFilterChanged("Harian")),
+                                          _buildTab("Mingguan",
+                                              _activeFilter == "Mingguan",
+                                              () => _onFilterChanged("Mingguan")),
+                                          _buildTab("Bulanan",
+                                              _activeFilter == "Bulanan",
+                                              () => _onFilterChanged("Bulanan")),
                                         ],
                                       ),
                                     )
                                   ],
                                 ),
-                                const SizedBox(height: 40),
+                                const SizedBox(height: 20),
                                 Column(
                                   children: [
                                     // CHART DAN LEGEND DALAM ROW YANG DIKELILINGI CENTER
@@ -450,30 +507,58 @@ class _HomeScreenState extends State<HomeScreen> {
                                           SizedBox(
                                             width: 120,
                                             height: 120,
-                                            child: PieChart(
-                                              PieChartData(
-                                                sectionsSpace: 0,
-                                                centerSpaceRadius: 45,
-                                                startDegreeOffset: -90,
-                                                sections: [
-                                                  PieChartSectionData(
-                                                    color: const Color(
-                                                        0xFF81C784), // Hijau Pemasukan
-                                                    value: _totalIncome,
-                                                    radius: 32,
-                                                    showTitle: false,
+                                            child: Stack(
+                                              children: [
+                                                PieChart(
+                                                  PieChartData(
+                                                    sectionsSpace: 0,
+                                                    centerSpaceRadius: 45,
+                                                    startDegreeOffset: -90,
+                                                    sections: [
+                                                      PieChartSectionData(
+                                                        color: const Color(
+                                                            0xFF81C784), // Hijau Pemasukan
+                                                        value: _totalIncome,
+                                                        radius: 16,
+                                                        showTitle: false,
+                                                      ),
+                                                      PieChartSectionData(
+                                                        color: const Color(
+                                                            0xFFFF8A65), // Orange Pengeluaran
+                                                        value: _totalExpense ==
+                                                                0
+                                                            ? 1
+                                                            : _totalExpense, // Minimal 1 biar gak ilang
+                                                        radius: 16,
+                                                        showTitle: false,
+                                                      ),
+                                                    ],
                                                   ),
-                                                  PieChartSectionData(
-                                                    color: const Color(
-                                                        0xFFFF8A65), // Orange Pengeluaran
-                                                    value: _totalExpense == 0
-                                                        ? 1
-                                                        : _totalExpense, // Minimal 1 biar gak ilang
-                                                    radius: 32,
-                                                    showTitle: false,
+                                                ),
+                                                Center(
+                                                  child: Column(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment
+                                                            .center,
+                                                    children: [
+                                                      Text("Terpakai",
+                                                          style: TextStyle(
+                                                              color:
+                                                                  Colors.grey,
+                                                              fontSize: 10)),
+                                                      Text(
+                                                          _totalIncome == 0
+                                                              ? "0%"
+                                                              : "${((_totalExpense / _totalIncome) * 100).toStringAsFixed(0)}%",
+                                                          style: TextStyle(
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold,
+                                                              fontSize: 16)),
+                                                    ],
                                                   ),
-                                                ],
-                                              ),
+                                                ),
+                                              ],
                                             ),
                                           ),
                                           const SizedBox(width: 40),
@@ -498,7 +583,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     )
                                   ],
                                 ),
-                                const SizedBox(height: 20),
+                                const SizedBox(height: 8),
                               ],
                             ),
                           ),
@@ -518,7 +603,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
-                                        builder: (context) => const HistoryScreen(),
+                                        builder: (context) =>
+                                            const HistoryScreen(),
                                       ),
                                     );
                                   },
@@ -593,20 +679,23 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildTab(String label, bool isActive) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-          color: isActive ? Colors.white : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-          boxShadow: isActive
-              ? [const BoxShadow(color: Colors.black12, blurRadius: 4)]
-              : []),
-      child: Text(label,
-          style: GoogleFonts.poppins(
-              fontSize: 12,
-              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-              color: isActive ? Colors.black87 : Colors.grey)),
+  Widget _buildTab(String label, bool isActive, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+            color: isActive ? Colors.white : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: isActive
+                ? [const BoxShadow(color: Colors.black12, blurRadius: 4)]
+                : []),
+        child: Text(label,
+            style: GoogleFonts.poppins(
+                fontSize: 12,
+                fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+                color: isActive ? Colors.black87 : Colors.grey)),
+      ),
     );
   }
 
@@ -649,20 +738,22 @@ class _HomeScreenState extends State<HomeScreen> {
       itemBuilder: (context, index) {
         final item = _transactions[index];
         final date = DateTime.parse(item['date']);
+        final categoryId = item['categoryId'];
 
-        // Cari kategori yang sesuai dari daftar kategori
+        // Cari kategori berdasarkan ID
         final category = _categories.firstWhere(
-          (cat) => cat['id'] == item['categoryId'],
-          orElse: () => {
-            'id': 'Belanja',
-            'icon': Icons.shopping_bag_outlined,
-            'color': const Color(0xFF64B5F6)
-          },
+          (cat) => cat.id == categoryId,
+          orElse: () => Category(
+            id: categoryId,
+            name: categoryId,
+            type: item['type'],
+            icon: Icons.category_rounded,
+            color: Colors.grey,
+          ),
         );
 
-        IconData icon = category['icon'];
-        Color bgIcon = (category['color'] as Color).withOpacity(0.1);
-        Color colorIcon = category['color'];
+        // Hitung warna background icon (lebih terang dari warna kategori)
+        final bgIcon = category.color.withOpacity(0.2);
 
         return Container(
           margin: const EdgeInsets.only(bottom: 16),
@@ -675,14 +766,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                     color: bgIcon, borderRadius: BorderRadius.circular(12)),
-                child: Icon(icon, color: colorIcon),
+                child: Icon(category.icon, color: category.color),
               ),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(item['categoryId'],
+                    Text(category.name,
                         style: GoogleFonts.poppins(
                             fontWeight: FontWeight.bold, fontSize: 16)),
                     Text(

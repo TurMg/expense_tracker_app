@@ -1,11 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'logic/services/category_service.dart'; // Import category service
 import 'presentation/screens/home_screen.dart'; // Import home screen langsung
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('id_ID', null);
+
+  // Initialize category service dengan data default
+  final categoryService = CategoryService();
+  await categoryService.initialize();
+
   runApp(const MyApp());
 }
 

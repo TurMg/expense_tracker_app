@@ -1,9 +1,16 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart';
 import '../../data/local/database_helper.dart';
+import '../../data/models/category_model.dart'; // Model kategori
+import '../../logic/services/ocr_service.dart';
+import '../../logic/services/category_service.dart'; // Service kategori
 import '../widgets/bottom_navbar.dart'; // Bottom navbar global
 import 'home_screen.dart'; // Untuk navigasi ke beranda
+import 'add_transaction_screen.dart'; // Halaman Manual
+import 'scan_result_screen.dart'; // Halaman Review Scan
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -16,10 +23,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
   // State Data
   List<Map<String, dynamic>> _allTransactions = [];
   List<Map<String, dynamic>> _filteredTransactions = [];
+  List<Category> _categories = []; // Kategori dinamis
   double _totalExpenseMonth = 0;
   double _totalIncomeMonth = 0;
   bool _isLoading = true;
   int _currentIndex = 2; // Untuk bottom navbar (index 2 = Riwayat)
+
+  // Service
+  final _ocrService = OcrService();
+  final _categoryService = CategoryService(); // Service kategori dinamis
 
   // State Filter
   String _searchQuery = '';
@@ -34,10 +46,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
   // --- LOGIC LOAD DATA ---
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
+
+    // Load transactions
     final data = await DatabaseHelper.instance.getAll('transactions');
+
+    // Load categories
+    final categories = await _categoryService.getAllCategories();
 
     setState(() {
       _allTransactions = data;
+      _categories = categories;
       _isLoading = false;
     });
 
@@ -316,10 +334,131 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return GlobalBottomNavBar(
       currentIndex: _currentIndex,
       onTabChanged: _onTabChanged,
-      onAddPressed: () {
-        // Tidak perlu action untuk tombol tambah di history screen
+      onAddPressed: _showAddOptions,
+    );
+  }
+
+  // --- LOGIC: TOMBOL (+) POPUP ---
+  void _showAddOptions() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text("Tambah Transaksi",
+                  style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.bold, fontSize: 18)),
+              const SizedBox(height: 20),
+
+              // OPSI 1: SCAN STRUK (Ke Halaman Review)
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                      color: Colors.blue[50], shape: BoxShape.circle),
+                  child: const Icon(Icons.document_scanner_rounded,
+                      color: Colors.blue),
+                ),
+                title: Text("Scan Struk",
+                    style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                subtitle: Text("Isi otomatis pakai AI",
+                    style:
+                        GoogleFonts.poppins(fontSize: 12, color: Colors.grey)),
+                onTap: _handleScanAndNavigate,
+              ),
+
+              const SizedBox(height: 10),
+
+              // OPSI 2: INPUT MANUAL (Ke Halaman Input Kosong)
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                      color: Colors.orange[50], shape: BoxShape.circle),
+                  child:
+                      const Icon(Icons.edit_note_rounded, color: Colors.orange),
+                ),
+                title: Text("Input Manual",
+                    style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                subtitle: Text("Ketik sendiri pengeluaranmu",
+                    style:
+                        GoogleFonts.poppins(fontSize: 12, color: Colors.grey)),
+                onTap: () async {
+                  Navigator.pop(context);
+                  // Buka Halaman Manual (AddTransactionScreen)
+                  final result = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const AddTransactionScreen()));
+                  if (result == true) _loadData();
+                },
+              ),
+            ],
+          ),
+        );
       },
     );
+  }
+
+  // --- LOGIC: SCANNER FLOW ---
+  Future<void> _handleScanAndNavigate() async {
+    Navigator.pop(context); // Tutup BottomSheet
+
+    try {
+      // 1. Buka Scanner HP
+      final options = DocumentScannerOptions(
+        documentFormat: DocumentFormat.jpeg,
+        mode: ScannerMode.full,
+        pageLimit: 1,
+        isGalleryImport: true,
+      );
+
+      final scanner = DocumentScanner(options: options);
+      final result = await scanner.scanDocument();
+
+      if (result.images.isEmpty) return;
+
+      // Show Loading Snack
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text("Sedang membaca struk... 🤖"),
+              duration: Duration(seconds: 1)),
+        );
+      }
+
+      // 2. Proses AI (OCR)
+      final receiptData = await _ocrService.scanReceipt(result.images.first);
+
+      // 3. Pindah ke Halaman REVIEW (ScanResultScreen)
+      if (mounted) {
+        final saveResult = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ScanResultScreen(
+              amount: receiptData.amount ?? 0,
+              date: receiptData.date ?? DateTime.now(),
+              receiptImage: File(result.images.first),
+            ),
+          ),
+        );
+
+        // Kalau user nyimpen data, refresh history
+        if (saveResult == true) _loadData();
+      }
+    } catch (e) {
+      print("Error Scan: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Gagal scan struk.")),
+      );
+    }
   }
 
   // --- WIDGET BUILDERS ---
@@ -417,27 +556,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget _buildTransactionCard(Map<String, dynamic> item) {
     bool isIncome = item['type'] == 'INCOME';
     double amount = item['amount'];
-    String category = item['categoryId'];
+    final categoryId = item['categoryId'];
     String note = item['note'] ?? '';
 
-    // Icon & Color Logic
-    IconData icon = Icons.shopping_bag_outlined;
-    Color bgIcon = const Color(0xFFE3F2FD);
-    Color iconColor = const Color(0xFF2196F3);
+    // Cari kategori berdasarkan ID
+    final category = _categories.firstWhere(
+      (cat) => cat.id == categoryId,
+      orElse: () => Category(
+        id: categoryId,
+        name: categoryId,
+        type: item['type'],
+        icon: Icons.category_rounded,
+        color: Colors.grey,
+      ),
+    );
 
-    if (category == 'Makan') {
-      icon = Icons.restaurant_rounded;
-      bgIcon = const Color(0xFFFFF3E0);
-      iconColor = const Color(0xFFFFA726);
-    } else if (category == 'Gaji' || isIncome) {
-      icon = Icons.account_balance_wallet_rounded;
-      bgIcon = const Color(0xFFE8F5E9);
-      iconColor = const Color(0xFF4CAF50);
-    } else if (category == 'Transport') {
-      icon = Icons.directions_car_rounded;
-      bgIcon = const Color(0xFFF3E5F5);
-      iconColor = const Color(0xFFAB47BC);
-    }
+    // Hitung warna background icon (lebih terang dari warna kategori)
+    final bgIcon = category.color.withOpacity(0.2);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -457,14 +592,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(color: bgIcon, shape: BoxShape.circle),
-            child: Icon(icon, color: iconColor, size: 20),
+            child: Icon(category.icon, color: category.color, size: 20),
           ),
           const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(category,
+                Text(category.name,
                     style: GoogleFonts.poppins(
                         fontWeight: FontWeight.bold, fontSize: 15)),
                 if (note.isNotEmpty)

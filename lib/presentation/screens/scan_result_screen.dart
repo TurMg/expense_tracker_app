@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart';
 import '../../data/local/database_helper.dart';
 import '../../logic/services/ocr_service.dart';
+import '../../logic/services/category_service.dart';
 
 class ScanResultScreen extends StatefulWidget {
   final double amount;
@@ -28,37 +29,79 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
   late TextEditingController _noteController;
   late DateTime _selectedDate;
   late File _currentImage;
-  
+
   bool _isExpense = true; // Default Pengeluaran
-  String _selectedCategory = 'Makan';
+  String _selectedCategory = ''; // Akan diisi dengan kategori dinamis
   final _ocrService = OcrService();
 
-  // Data Kategori
-  final List<Map<String, dynamic>> _categories = [
-    {'id': 'Makan', 'icon': Icons.restaurant_rounded, 'color': const Color(0xFFF4A285)},
-    {'id': 'Transport', 'icon': Icons.directions_bus_rounded, 'color': const Color(0xFF81C784)},
-    {'id': 'Belanja', 'icon': Icons.shopping_bag_rounded, 'color': const Color(0xFF64B5F6)},
-    {'id': 'Tagihan', 'icon': Icons.receipt_long_rounded, 'color': const Color(0xFFE57373)},
-  ];
+  List<Map<String, dynamic>> _expenseCategories = [];
+  List<Map<String, dynamic>> _incomeCategories = [];
+  final CategoryService _categoryService = CategoryService();
+  bool _isLoadingCategories = true;
 
   // --- DEFINISI WARNA ---
-  final Color _greenBorder = const Color(0xFF4CAF50);  
-  final Color _orangeActive = const Color(0xFFF4A285); 
+  final Color _greenBorder = const Color(0xFF4CAF50);
+  final Color _orangeActive = const Color(0xFFF4A285);
   final Color _greyBg = const Color(0xFFF5F6FA);
-  
+
   // Warna Tombol Simpan (Hijau Add Transaction)
-  final Color _greenBtnColor = const Color.fromARGB(255, 11, 177, 100); 
-  
+  final Color _greenBtnColor = const Color.fromARGB(255, 11, 177, 100);
+
   // Warna Tombol Pemasukan (Request Baru)
-  final Color _greenIncomeActive = const Color(0xFF4CAF50); 
+  final Color _greenIncomeActive = const Color(0xFF4CAF50);
 
   @override
   void initState() {
     super.initState();
-    _amountController = TextEditingController(text: widget.amount.toStringAsFixed(0));
+    _amountController =
+        TextEditingController(text: widget.amount.toStringAsFixed(0));
     _noteController = TextEditingController();
     _selectedDate = widget.date;
     _currentImage = widget.receiptImage;
+    _loadCategories();
+  }
+
+  // Load kategori dari database
+  Future<void> _loadCategories() async {
+    try {
+      final expenseCats = await _categoryService.getCategoriesByType('EXPENSE');
+      final incomeCats = await _categoryService.getCategoriesByType('INCOME');
+
+      setState(() {
+        _expenseCategories = expenseCats
+            .map((cat) => {
+                  'id': cat.id,
+                  'name': cat.name,
+                  'icon': cat.icon,
+                  'color': cat.color,
+                })
+            .toList();
+
+        _incomeCategories = incomeCats
+            .map((cat) => {
+                  'id': cat.id,
+                  'name': cat.name,
+                  'icon': cat.icon,
+                  'color': cat.color,
+                })
+            .toList();
+
+        _isLoadingCategories = false;
+
+        // Set default category jika selected category kosong atau tidak ada di list
+        final currentCategories =
+            _isExpense ? _expenseCategories : _incomeCategories;
+        if (_selectedCategory.isEmpty ||
+            !currentCategories.any((cat) => cat['id'] == _selectedCategory)) {
+          if (currentCategories.isNotEmpty) {
+            _selectedCategory = currentCategories.first['id'];
+          }
+        }
+      });
+    } catch (e) {
+      print('Error loading categories: $e');
+      setState(() => _isLoadingCategories = false);
+    }
   }
 
   @override
@@ -73,19 +116,22 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     try {
       final transaction = {
         'id': const Uuid().v4(),
-        'amount': double.parse(_amountController.text.replaceAll(RegExp(r'[^0-9]'), '')),
+        'amount': double.parse(
+            _amountController.text.replaceAll(RegExp(r'[^0-9]'), '')),
         'categoryId': _selectedCategory,
         'date': _selectedDate.toIso8601String(),
-        'note': _noteController.text.isEmpty ? "Scan Struk" : _noteController.text,
+        'note':
+            _noteController.text.isEmpty ? "Scan Struk" : _noteController.text,
         'receiptPath': _currentImage.path,
         // TAMBAHAN PENTING: Penanda Tipe Transaksi
         'type': _isExpense ? 'EXPENSE' : 'INCOME',
       };
 
       print('Menyimpan transaksi scan: $transaction');
-      final result = await DatabaseHelper.instance.insert('transactions', transaction);
+      final result =
+          await DatabaseHelper.instance.insert('transactions', transaction);
       print('Transaksi scan berhasil disimpan dengan ID: $result');
-      
+
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       print('Error menyimpan transaksi scan: $e');
@@ -94,7 +140,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 
   // --- LOGIC RESCAN ---
   Future<void> _performRescan() async {
-    Navigator.pop(context); 
+    Navigator.pop(context);
 
     try {
       final options = DocumentScannerOptions(
@@ -103,14 +149,16 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
         pageLimit: 1,
         isGalleryImport: true,
       );
-      
+
       final scanner = DocumentScanner(options: options);
       final result = await scanner.scanDocument();
-      
+
       if (result.images.isEmpty) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Memperbarui data... 🤖"), duration: Duration(seconds: 1)),
+        const SnackBar(
+            content: Text("Memperbarui data... 🤖"),
+            duration: Duration(seconds: 1)),
       );
 
       final newPath = result.images.first;
@@ -125,7 +173,6 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
           _selectedDate = ocrResult.date!;
         }
       });
-
     } catch (e) {
       print("Error Rescan: $e");
     }
@@ -135,21 +182,25 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text("Scan Ulang?", style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
-        content: Text("Gambar dan data yang sekarang akan diganti.", style: GoogleFonts.poppins()),
+        title: Text("Scan Ulang?",
+            style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+        content: Text("Gambar dan data yang sekarang akan diganti.",
+            style: GoogleFonts.poppins()),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text("Batal", style: GoogleFonts.poppins(color: Colors.grey)),
+            child:
+                Text("Batal", style: GoogleFonts.poppins(color: Colors.grey)),
           ),
           ElevatedButton(
             onPressed: _performRescan,
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))
-            ),
-            child: Text("Ya, Buka Kamera", style: GoogleFonts.poppins(color: Colors.white)),
+                backgroundColor: Colors.redAccent,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8))),
+            child: Text("Ya, Buka Kamera",
+                style: GoogleFonts.poppins(color: Colors.white)),
           ),
         ],
       ),
@@ -159,7 +210,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
   String _formatNumber(String value) {
     if (value.isEmpty) return "0";
     double num = double.tryParse(value.replaceAll('.', '')) ?? 0;
-    return NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(num);
+    return NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0)
+        .format(num);
   }
 
   @override
@@ -175,8 +227,10 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
         ),
         centerTitle: true,
         title: Container(
-          width: 40, height: 4,
-          decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+          width: 40,
+          height: 4,
+          decoration: BoxDecoration(
+              color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
         ),
       ),
       body: Column(
@@ -195,25 +249,26 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text("Review Transaksi", 
-                            style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold)),
+                          Text("Review Transaksi",
+                              style: GoogleFonts.poppins(
+                                  fontSize: 22, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 4),
-                          Text("Pastikan data sesuai dengan struk", 
-                            style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey)),
+                          Text("Pastikan data sesuai dengan struk",
+                              style: GoogleFonts.poppins(
+                                  fontSize: 12, color: Colors.grey)),
                         ],
                       ),
                       GestureDetector(
-                        onTap: () {}, 
+                        onTap: () {},
                         child: Container(
-                          width: 48, height: 60,
+                          width: 48,
+                          height: 60,
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(8),
-                            color: Colors.black,
-                            image: DecorationImage(
-                              image: FileImage(_currentImage),
-                              fit: BoxFit.cover
-                            )
-                          ),
+                              borderRadius: BorderRadius.circular(8),
+                              color: Colors.black,
+                              image: DecorationImage(
+                                  image: FileImage(_currentImage),
+                                  fit: BoxFit.cover)),
                         ),
                       )
                     ],
@@ -222,40 +277,58 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                   const SizedBox(height: 30),
 
                   // 2. TOTAL BAYAR
-                  Text("TOTAL BAYAR", style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey)),
+                  Text("TOTAL BAYAR",
+                      style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey)),
                   const SizedBox(height: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      border: Border.all(color: _greenBorder.withOpacity(0.3), width: 1.5),
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(color: _greenBorder.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))
-                      ]
-                    ),
+                        color: Colors.white,
+                        border: Border.all(
+                            color: _greenBorder.withOpacity(0.3), width: 1.5),
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                              color: _greenBorder.withOpacity(0.05),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4))
+                        ]),
                     child: Row(
                       children: [
-                        Text("Rp", style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey[400])),
+                        Text("Rp",
+                            style: GoogleFonts.poppins(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.grey[400])),
                         const SizedBox(width: 12),
                         Expanded(
                           child: TextField(
                             controller: _amountController,
-                            style: GoogleFonts.poppins(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.black87),
+                            style: GoogleFonts.poppins(
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.black87),
                             keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(border: InputBorder.none),
+                            decoration:
+                                const InputDecoration(border: InputBorder.none),
                             onChanged: (val) {
                               String formatted = _formatNumber(val);
                               if (formatted != val) {
                                 _amountController.value = TextEditingValue(
                                   text: formatted,
-                                  selection: TextSelection.collapsed(offset: formatted.length),
+                                  selection: TextSelection.collapsed(
+                                      offset: formatted.length),
                                 );
                               }
                             },
                           ),
                         ),
-                        const Icon(Icons.check_circle_outline_rounded, color: Colors.green, size: 24)
+                        const Icon(Icons.check_circle_outline_rounded,
+                            color: Colors.green, size: 24)
                       ],
                     ),
                   ),
@@ -266,9 +339,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                   Container(
                     padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
-                      color: _greyBg,
-                      borderRadius: BorderRadius.circular(12)
-                    ),
+                        color: _greyBg,
+                        borderRadius: BorderRadius.circular(12)),
                     child: Row(
                       children: [
                         Expanded(child: _buildTabButton("Pengeluaran", true)),
@@ -283,42 +355,62 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text("Kategori", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16)),
-                      Text("Lihat Semua", style: GoogleFonts.poppins(color: Colors.blue[400], fontSize: 12)),
+                      Text("Kategori",
+                          style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.bold, fontSize: 16)),
+                      Text("Lihat Semua",
+                          style: GoogleFonts.poppins(
+                              color: Colors.blue[400], fontSize: 12)),
                     ],
                   ),
                   const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: _categories.map((cat) => _buildCategoryItem(cat)).toList(),
-                  ),
+                  _isLoadingCategories
+                      ? const CircularProgressIndicator()
+                      : Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: (_isExpense
+                                  ? _expenseCategories
+                                  : _incomeCategories)
+                              .map((cat) => _buildCategoryItem(cat))
+                              .toList(),
+                        ),
 
                   const SizedBox(height: 30),
 
                   // 5. TANGGAL
-                  Align(alignment: Alignment.centerLeft, child: Text("Tanggal", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16))),
+                  Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text("Tanggal",
+                          style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.bold, fontSize: 16))),
                   const SizedBox(height: 10),
                   GestureDetector(
                     onTap: () async {
                       final picked = await showDatePicker(
-                        context: context, initialDate: _selectedDate,
-                        firstDate: DateTime(2020), lastDate: DateTime.now()
-                      );
-                      if (picked != null) setState(() => _selectedDate = picked);
+                          context: context,
+                          initialDate: _selectedDate,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime.now());
+                      if (picked != null)
+                        setState(() => _selectedDate = picked);
                     },
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
                       decoration: BoxDecoration(
-                        border: Border.all(color: Colors.grey[300]!),
-                        borderRadius: BorderRadius.circular(12)
-                      ),
+                          border: Border.all(color: Colors.grey[300]!),
+                          borderRadius: BorderRadius.circular(12)),
                       child: Row(
                         children: [
-                          Icon(Icons.calendar_today_rounded, size: 20, color: Colors.grey[600]),
+                          Icon(Icons.calendar_today_rounded,
+                              size: 20, color: Colors.grey[600]),
                           const SizedBox(width: 12),
-                          Text(DateFormat('dd MMM yyyy').format(_selectedDate), style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                          Text(DateFormat('dd MMM yyyy').format(_selectedDate),
+                              style: GoogleFonts.poppins(
+                                  fontWeight: FontWeight.bold)),
                           const Spacer(),
-                          Icon(Icons.keyboard_arrow_down_rounded, color: Colors.grey[400])
+                          Icon(Icons.keyboard_arrow_down_rounded,
+                              color: Colors.grey[400])
                         ],
                       ),
                     ),
@@ -327,23 +419,26 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                   const SizedBox(height: 20),
 
                   // 6. CATATAN
-                  Align(alignment: Alignment.centerLeft, child: Text("Catatan", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16))),
+                  Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text("Catatan",
+                          style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.bold, fontSize: 16))),
                   const SizedBox(height: 10),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                     decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey[300]!),
-                      borderRadius: BorderRadius.circular(12)
-                    ),
+                        border: Border.all(color: Colors.grey[300]!),
+                        borderRadius: BorderRadius.circular(12)),
                     child: TextField(
                       controller: _noteController,
                       maxLines: 3,
                       minLines: 1,
                       decoration: const InputDecoration(
-                        icon: Icon(Icons.sort_rounded, color: Colors.grey),
-                        hintText: "Tulis deskripsi transaksi...",
-                        border: InputBorder.none
-                      ),
+                          icon: Icon(Icons.sort_rounded, color: Colors.grey),
+                          hintText: "Tulis deskripsi transaksi...",
+                          border: InputBorder.none),
                       style: GoogleFonts.poppins(),
                     ),
                   ),
@@ -358,9 +453,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
           Container(
             padding: const EdgeInsets.all(24),
             decoration: const BoxDecoration(
-              color: Colors.white,
-              border: Border(top: BorderSide(color: Color(0xFFF5F5F5)))
-            ),
+                color: Colors.white,
+                border: Border(top: BorderSide(color: Color(0xFFF5F5F5)))),
             child: Row(
               children: [
                 // TOMBOL SCAN ULANG
@@ -369,15 +463,15 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                   child: Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey[300]!),
-                      borderRadius: BorderRadius.circular(12),
-                      color: Colors.white
-                    ),
-                    child: const Icon(Icons.camera_alt_outlined, color: Colors.black54),
+                        border: Border.all(color: Colors.grey[300]!),
+                        borderRadius: BorderRadius.circular(12),
+                        color: Colors.white),
+                    child: const Icon(Icons.camera_alt_outlined,
+                        color: Colors.black54),
                   ),
                 ),
                 const SizedBox(width: 16),
-                
+
                 // TOMBOL SIMPAN (WARNA HIJAU ADD TRANSACTION)
                 Expanded(
                   child: SizedBox(
@@ -385,17 +479,22 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                     child: ElevatedButton(
                       onPressed: _saveTransaction,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _greenBtnColor, // WARNA HIJAU SAMA DENGAN MANUAL
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
-                      ),
+                          backgroundColor:
+                              _greenBtnColor, // WARNA HIJAU SAMA DENGAN MANUAL
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12))),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.check, color: Colors.white, size: 20),
+                          const Icon(Icons.check,
+                              color: Colors.white, size: 20),
                           const SizedBox(width: 8),
-                          Text("Simpan Transaksi", 
-                            style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 16)),
+                          Text("Simpan Transaksi",
+                              style: GoogleFonts.poppins(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                  fontSize: 16)),
                         ],
                       ),
                     ),
@@ -415,12 +514,22 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
   Widget _buildTabButton(String label, bool isExp) {
     // Cek apakah tab ini sedang aktif
     bool isActive = _isExpense == isExp;
-    
+
     // Tentukan warna aktif: Orange untuk Pengeluaran, Hijau #a2d1b0 untuk Pemasukan
     Color activeColor = isExp ? _orangeActive : _greenIncomeActive;
 
     return GestureDetector(
-      onTap: () => setState(() => _isExpense = isExp),
+      onTap: () {
+        setState(() {
+          _isExpense = isExp;
+          // Reset kategori ke default berdasarkan jenis transaksi
+          final categories =
+              _isExpense ? _expenseCategories : _incomeCategories;
+          if (categories.isNotEmpty) {
+            _selectedCategory = categories.first['id'];
+          }
+        });
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
@@ -428,11 +537,11 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
           borderRadius: BorderRadius.circular(10),
         ),
         child: Center(
-          child: Text(label, style: GoogleFonts.poppins(
-            fontWeight: FontWeight.w600,
-            color: isActive ? Colors.white : Colors.grey[600],
-            fontSize: 14
-          )),
+          child: Text(label,
+              style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w600,
+                  color: isActive ? Colors.white : Colors.grey[600],
+                  fontSize: 14)),
         ),
       ),
     );
@@ -447,17 +556,20 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: isSelected ? cat['color'] : cat['color'].withOpacity(0.1), 
+              color: isSelected
+                  ? cat['color']
+                  : (cat['color'] as Color)
+                      .withOpacity(0.1), // Selected jadi solid, unselected soft
               borderRadius: BorderRadius.circular(16),
             ),
-            child: Icon(cat['icon'], color: isSelected ? Colors.white : cat['color'], size: 24),
+            child: Icon(cat['icon'] as IconData,
+                color: isSelected ? Colors.white : cat['color']),
           ),
           const SizedBox(height: 8),
-          Text(cat['id'], style: GoogleFonts.poppins(
-            fontSize: 12, 
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            color: isSelected ? Colors.black87 : Colors.grey
-          ))
+          Text(cat['name'],
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal))
         ],
       ),
     );
