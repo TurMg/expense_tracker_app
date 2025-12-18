@@ -17,13 +17,15 @@ class DatabaseHelper {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
 
-    return await openDatabase(path, version: 2, onCreate: _createDB, onUpgrade: _onUpgrade);
+    return await openDatabase(path,
+        version: 2, onCreate: _createDB, onUpgrade: _onUpgrade);
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       // Tambahkan kolom type ke tabel transactions
-      await db.execute('ALTER TABLE transactions ADD COLUMN type TEXT NOT NULL DEFAULT "EXPENSE"');
+      await db.execute(
+          'ALTER TABLE transactions ADD COLUMN type TEXT NOT NULL DEFAULT "EXPENSE"');
     }
   }
 
@@ -72,5 +74,11 @@ class DatabaseHelper {
       [List<Object?>? arguments]) async {
     final db = await instance.database;
     return await db.rawQuery(sql, arguments);
+  }
+
+  Future<int> update(String table, Map<String, dynamic> data,
+      {String? where, List<Object?>? whereArgs}) async {
+    final db = await instance.database;
+    return await db.update(table, data, where: where, whereArgs: whereArgs);
   }
 }

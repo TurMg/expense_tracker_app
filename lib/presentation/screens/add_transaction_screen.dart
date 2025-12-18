@@ -10,9 +10,14 @@ class AddTransactionScreen extends StatefulWidget {
   final double? initialAmount;
   final DateTime? initialDate;
   final File? initialImage;
+  final Map<String, dynamic>? existingTransaction;
 
   const AddTransactionScreen(
-      {super.key, this.initialAmount, this.initialDate, this.initialImage});
+      {super.key,
+      this.initialAmount,
+      this.initialDate,
+      this.initialImage,
+      this.existingTransaction});
 
   @override
   State<AddTransactionScreen> createState() => _AddTransactionScreenState();
@@ -35,7 +40,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       const Color(0xFF98D1B6); // Warna Hijau Tombol Simpan
   final Color _textAmountColor = const Color(0xFFF4A285);
 
-  final Color _greenIncomeActive = const Color(0xFF4CAF50); 
+  final Color _greenIncomeActive = const Color(0xFF4CAF50);
 
   List<Map<String, dynamic>> _expenseCategories = [];
   List<Map<String, dynamic>> _incomeCategories = [];
@@ -45,17 +50,36 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   @override
   void initState() {
     super.initState();
-    // Isi data kalau ada (dari hasil scan)
-    _amountController = TextEditingController(
-        text: widget.initialAmount != null
-            ? widget.initialAmount!.toStringAsFixed(0)
-            : '');
-    // Set initial state untuk amount filled
-    _isAmountFilled = widget.initialAmount != null && widget.initialAmount! > 0;
-    if (widget.initialDate != null) {
-      _selectedDate = widget.initialDate!;
+
+    // Prioritaskan data dari existingTransaction jika ada
+    if (widget.existingTransaction != null) {
+      final transaction = widget.existingTransaction!;
+      _amountController = TextEditingController(
+          text: transaction['amount']?.toStringAsFixed(0) ?? '');
+      _isAmountFilled =
+          transaction['amount'] != null && transaction['amount'] > 0;
+      final originalDate = DateTime.parse(
+          transaction['date'] ?? DateTime.now().toIso8601String());
+      _selectedDate = originalDate;
+      _noteController = TextEditingController(text: transaction['note'] ?? '');
+      _isExpense =
+          (transaction['type'] == 'EXPENSE' || transaction['type'] == null);
+      _selectedCategory = transaction['categoryId'] ?? '';
+    } else {
+      // Isi data kalau ada (dari hasil scan)
+      _amountController = TextEditingController(
+          text: widget.initialAmount != null
+              ? widget.initialAmount!.toStringAsFixed(0)
+              : '');
+      // Set initial state untuk amount filled
+      _isAmountFilled =
+          widget.initialAmount != null && widget.initialAmount! > 0;
+      if (widget.initialDate != null) {
+        _selectedDate = widget.initialDate!;
+      }
+      _noteController = TextEditingController();
     }
-    _noteController = TextEditingController();
+
     _loadCategories();
   }
 
@@ -117,7 +141,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
     try {
       final transaction = {
-        'id': const Uuid().v4(),
         'amount': double.parse(
             _amountController.text.replaceAll('.', '')), // Hapus titik format
         'categoryId': _selectedCategory,
@@ -128,10 +151,24 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         'type': _isExpense ? 'EXPENSE' : 'INCOME', // Tentukan tipe transaksi
       };
 
-      print('Menyimpan transaksi: $transaction');
-      final result =
-          await DatabaseHelper.instance.insert('transactions', transaction);
-      print('Transaksi berhasil disimpan dengan ID: $result');
+      if (widget.existingTransaction != null) {
+        // Update transaksi yang sudah ada
+        print('Memperbarui transaksi: $transaction');
+        await DatabaseHelper.instance.update(
+          'transactions',
+          transaction,
+          where: 'id = ?',
+          whereArgs: [widget.existingTransaction!['id']],
+        );
+        print('Transaksi berhasil diperbarui');
+      } else {
+        // Buat transaksi baru
+        transaction['id'] = const Uuid().v4();
+        print('Menyimpan transaksi baru: $transaction');
+        final result =
+            await DatabaseHelper.instance.insert('transactions', transaction);
+        print('Transaksi berhasil disimpan dengan ID: $result');
+      }
 
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -161,9 +198,13 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           icon: const Icon(Icons.close, color: Colors.black87),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text("Tambah Transaksi",
-            style:
-                TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
+        title: Text(
+          widget.existingTransaction != null
+              ? "Edit Transaksi"
+              : "Tambah Transaksi",
+          style: const TextStyle(
+              color: Colors.black87, fontWeight: FontWeight.bold),
+        ),
       ),
       body: Column(
         children: [
@@ -279,8 +320,18 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                           initialDate: _selectedDate,
                           firstDate: DateTime(2020),
                           lastDate: DateTime.now());
-                      if (picked != null)
-                        setState(() => _selectedDate = picked);
+                      if (picked != null) {
+                        // Pertahankan waktu asli transaksi, hanya ubah tanggalnya
+                        // Ini lebih akurat untuk pencatatan keuangan pribadi
+                        final newDate = DateTime(
+                          picked.year,
+                          picked.month,
+                          picked.day,
+                          _selectedDate.hour,
+                          _selectedDate.minute,
+                        );
+                        setState(() => _selectedDate = newDate);
+                      }
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(

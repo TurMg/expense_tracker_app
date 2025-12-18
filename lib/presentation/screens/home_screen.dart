@@ -11,6 +11,7 @@ import '../../logic/services/category_service.dart'; // Service kategori dinamis
 import 'add_transaction_screen.dart'; // Halaman Manual
 import 'history_screen.dart'; // Halaman Riwayat
 import 'scan_result_screen.dart'; // Halaman Review Scan (File Baru)
+import 'transaction_detail_screen.dart'; // Halaman Detail Transaksi
 import '../widgets/bottom_navbar.dart'; // Bottom navbar global
 
 class HomeScreen extends StatefulWidget {
@@ -24,19 +25,24 @@ class _HomeScreenState extends State<HomeScreen> {
   // --- STATE VARIABLES ---
   double _totalExpense = 0;
   double _totalIncome = 0;
+  double _totalAllExpense =
+      0; // Total pengeluaran semua transaksi (tidak terfilter)
+  double _totalAllIncome =
+      0; // Total pemasukan semua transaksi (tidak terfilter)
   List<Map<String, dynamic>> _transactions = [];
-  List<Map<String, dynamic>> _allTransactions = []; // Semua transaksi untuk filter cepat
+  List<Map<String, dynamic>> _allTransactions =
+      []; // Semua transaksi untuk filter cepat
   List<Category> _categories = []; // Kategori dinamis
   bool _isLoading = true;
   int _currentIndex = 0; // Untuk bottom navbar
-  String _activeFilter = "Mingguan"; // Filter aktif: Harian, Mingguan, Bulanan
+  String _activeFilter = "Harian"; // Filter aktif: Harian, Mingguan, Bulanan
 
   // Service OCR
   final _ocrService = OcrService();
   final _categoryService = CategoryService(); // Service kategori dinamis
 
   // Getter Saldo Saat Ini
-  double get _currentBalance => _totalIncome - _totalExpense;
+  double get _currentBalance => _totalAllIncome - _totalAllExpense;
 
   @override
   void initState() {
@@ -51,6 +57,17 @@ class _HomeScreenState extends State<HomeScreen> {
     // Load transactions
     final data = await DatabaseHelper.instance.getAll('transactions');
     _allTransactions = data; // Simpan semua data
+
+    // Hitung total semua transaksi (tidak terfilter)
+    double totalAllExpense = 0;
+    double totalAllIncome = 0;
+    for (var item in data) {
+      if (item['type'] == 'EXPENSE') {
+        totalAllExpense += (item['amount'] as double);
+      } else if (item['type'] == 'INCOME') {
+        totalAllIncome += (item['amount'] as double);
+      }
+    }
 
     // Filter transactions berdasarkan periode aktif
     final filteredData = _filterTransactionsByPeriod(data, _activeFilter);
@@ -77,6 +94,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _transactions = sortedData;
       _totalExpense = totalExpense;
       _totalIncome = totalIncome;
+      _totalAllExpense = totalAllExpense;
+      _totalAllIncome = totalAllIncome;
       _categories = categories;
       _isLoading = false;
     });
@@ -137,6 +156,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _transactions = sortedData;
       _totalExpense = totalExpense;
       _totalIncome = totalIncome;
+      // Saldo total (_totalAllIncome dan _totalAllExpense) tidak diubah agar tetap menampilkan semua transaksi
     });
   }
 
@@ -309,7 +329,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // Definisi Warna UI
     final blueGradientStart = const Color(0xFF6FABEF);
     final blueGradientEnd = const Color(0xFF5CA6E9);
-    final greenSoft = const Color(0xFFE5F7ED);
+    final greenSoft = const Color(0xFFE6F1EB);
     final greenText = const Color(0xFF4CAF50);
     final orangeSoft = const Color(0xFFFBECE6);
     final orangeText = const Color(0xFFE57373);
@@ -389,7 +409,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    Text("Saldo Total",
+                                    Text("Saldo Saat Ini",
                                         style: GoogleFonts.poppins(
                                             color:
                                                 Colors.white.withOpacity(0.9))),
@@ -454,7 +474,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ],
                           ),
 
-                          const SizedBox(height: 40),
+                          const SizedBox(height: 25),
 
                           // 4. CHART RINGKASAN
                           Container(
@@ -480,15 +500,20 @@ class _HomeScreenState extends State<HomeScreen> {
                                               BorderRadius.circular(12)),
                                       child: Row(
                                         children: [
-                                          _buildTab("Harian",
+                                          _buildTab(
+                                              "Harian",
                                               _activeFilter == "Harian",
                                               () => _onFilterChanged("Harian")),
-                                          _buildTab("Mingguan",
+                                          _buildTab(
+                                              "Mingguan",
                                               _activeFilter == "Mingguan",
-                                              () => _onFilterChanged("Mingguan")),
-                                          _buildTab("Bulanan",
+                                              () =>
+                                                  _onFilterChanged("Mingguan")),
+                                          _buildTab(
+                                              "Bulanan",
                                               _activeFilter == "Bulanan",
-                                              () => _onFilterChanged("Bulanan")),
+                                              () =>
+                                                  _onFilterChanged("Bulanan")),
                                         ],
                                       ),
                                     )
@@ -588,7 +613,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
 
-                          const SizedBox(height: 24),
+                          const SizedBox(height: 16),
 
                           // 5. TRANSAKSI TERAKHIR
                           Row(
@@ -648,32 +673,18 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-                color: iconColor.withOpacity(0.2), shape: BoxShape.circle),
+                color: iconColor.withOpacity(0.3), shape: BoxShape.circle),
             child: Icon(icon, color: iconColor, size: 18),
           ),
           const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: GoogleFonts.poppins(
-                        color: iconColor,
-                        fontWeight: FontWeight.w500,
-                        fontSize: 14)),
-                const SizedBox(height: 2),
-                Text(_formatRp(amount),
-                    style: GoogleFonts.poppins(
-                        color: iconColor,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14))
-              ],
-            ),
-          )
+          Text(label,
+              style: GoogleFonts.poppins(
+                  color: iconColor, fontWeight: FontWeight.w600, fontSize: 16)),
         ],
       ),
     );
@@ -755,44 +766,63 @@ class _HomeScreenState extends State<HomeScreen> {
         // Hitung warna background icon (lebih terang dari warna kategori)
         final bgIcon = category.color.withOpacity(0.2);
 
-        return Container(
-          margin: const EdgeInsets.only(bottom: 16),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-              color: Colors.white, borderRadius: BorderRadius.circular(16)),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                    color: bgIcon, borderRadius: BorderRadius.circular(12)),
-                child: Icon(category.icon, color: category.color),
+        return GestureDetector(
+          onTap: () async {
+            final result = await showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: Colors.transparent,
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.65,
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(category.name,
-                        style: GoogleFonts.poppins(
-                            fontWeight: FontWeight.bold, fontSize: 16)),
-                    Text(
-                        "${DateFormat('HH:mm').format(date)} • ${DateFormat('d MMM').format(date)}",
-                        style: GoogleFonts.poppins(
-                            color: Colors.grey, fontSize: 12)),
-                  ],
+              builder: (context) => TransactionDetailScreen(
+                transaction: item,
+              ),
+            );
+
+            if (result == true) {
+              _loadData(); // Refresh data jika transaksi dihapus atau diedit
+            }
+          },
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 16),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+                color: Colors.white, borderRadius: BorderRadius.circular(16)),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                      color: bgIcon, borderRadius: BorderRadius.circular(12)),
+                  child: Icon(category.icon, color: category.color),
                 ),
-              ),
-              Text(
-                "${item['type'] == 'EXPENSE' ? '-' : '+'} ${_formatRp(item['amount'])}",
-                style: GoogleFonts.poppins(
-                    color: item['type'] == 'EXPENSE'
-                        ? const Color(0xFFFF8A65)
-                        : const Color(0xFF4CAF50),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16),
-              )
-            ],
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(category.name,
+                          style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.bold, fontSize: 16)),
+                      Text(
+                          "${DateFormat('HH:mm').format(date)} • ${DateFormat('d MMM').format(date)}",
+                          style: GoogleFonts.poppins(
+                              color: Colors.grey, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                Text(
+                  "${item['type'] == 'EXPENSE' ? '-' : '+'} ${_formatRp(item['amount'])}",
+                  style: GoogleFonts.poppins(
+                      color: item['type'] == 'EXPENSE'
+                          ? const Color(0xFFFF8A65)
+                          : const Color(0xFF4CAF50),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16),
+                )
+              ],
+            ),
           ),
         );
       },
