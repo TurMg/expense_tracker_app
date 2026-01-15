@@ -9,8 +9,10 @@ import '../../logic/services/ocr_service.dart';
 import '../../logic/services/category_service.dart'; // Service kategori
 import '../widgets/bottom_navbar.dart'; // Bottom navbar global
 import 'home_screen.dart'; // Untuk navigasi ke beranda
+import 'statistics_screen.dart'; // Halaman Statistik
 import 'add_transaction_screen.dart'; // Halaman Manual
 import 'scan_result_screen.dart'; // Halaman Review Scan
+import 'profile_screen.dart'; // Halaman Profil
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -168,7 +170,24 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
       );
     }
-    // Tab 1 (Statistik) dan 3 (Profil) masih placeholder
+    if (index == 1) {
+      // Statistik
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const StatisticsScreen(),
+        ),
+      );
+    }
+    if (index == 3) {
+      // Profil
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const ProfileScreen(),
+        ),
+      );
+    }
   }
 
   @override
@@ -178,10 +197,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black),
-          onPressed: () => Navigator.pop(context),
-        ),
+        automaticallyImplyLeading: false,
         title: Text("Riwayat Transaksi",
             style: GoogleFonts.poppins(
                 color: Colors.black,
@@ -325,16 +341,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 ),
               ],
             ),
-      bottomNavigationBar: _buildBottomNavBar(),
-    );
-  }
-
-  // --- BOTTOM NAVBAR ---
-  Widget _buildBottomNavBar() {
-    return GlobalBottomNavBar(
-      currentIndex: _currentIndex,
-      onTabChanged: _onTabChanged,
-      onAddPressed: _showAddOptions,
     );
   }
 

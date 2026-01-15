@@ -120,7 +120,7 @@ class OcrService {
 
   // --- FUZZY & BLACKLIST (SAMA) ---
   bool _isTotalLabelFuzzy(String line) {
-    bool hasKeyword = _fuzzyContains(line, ['total', 'jumlah', 'bayar', 'grand', 'tagihan', 'belanja']);
+    bool hasKeyword = _fuzzyContains(line, ['total', 'jumlah', 'bayar', 'grand', 'tagihan', 'harga', 'belanja']);
     bool isTrap = _fuzzyContains(line, ['subtotal', 'diskon', 'disc', 'tax', 'pajak', 'ppn', 'dpp', 'item']);
     return hasKeyword && !isTrap;
   }

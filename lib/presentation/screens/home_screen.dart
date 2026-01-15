@@ -9,19 +9,18 @@ import '../../data/models/category_model.dart'; // Model kategori
 import '../../logic/services/ocr_service.dart';
 import '../../logic/services/category_service.dart'; // Service kategori dinamis
 import 'add_transaction_screen.dart'; // Halaman Manual
-import 'history_screen.dart'; // Halaman Riwayat
 import 'scan_result_screen.dart'; // Halaman Review Scan (File Baru)
 import 'transaction_detail_screen.dart'; // Halaman Detail Transaksi
-import '../widgets/bottom_navbar.dart'; // Bottom navbar global
+import 'history_screen.dart'; // Halaman Riwayat
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<HomeScreen> createState() => HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class HomeScreenState extends State<HomeScreen> {
   // --- STATE VARIABLES ---
   double _totalExpense = 0;
   double _totalIncome = 0;
@@ -34,7 +33,6 @@ class _HomeScreenState extends State<HomeScreen> {
       []; // Semua transaksi untuk filter cepat
   List<Category> _categories = []; // Kategori dinamis
   bool _isLoading = true;
-  int _currentIndex = 0; // Untuk bottom navbar
   String _activeFilter = "Harian"; // Filter aktif: Harian, Mingguan, Bulanan
 
   // Service OCR
@@ -99,31 +97,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _categories = categories;
       _isLoading = false;
     });
-  }
-
-  // --- LOGIC: NAVIGASI BOTTOM NAVBAR ---
-  void _onTabChanged(int index) {
-    setState(() {
-      _currentIndex = index;
-    });
-
-    // Navigasi ke screen yang sesuai berdasarkan index
-    if (index == 2) {
-      // Riwayat
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => const HistoryScreen(),
-        ),
-      );
-      // Kembali ke index 0 setelah navigasi
-      Future.delayed(Duration.zero, () {
-        setState(() {
-          _currentIndex = 0;
-        });
-      });
-    }
-    // Tambahkan navigasi untuk tab lain jika diperlukan
   }
 
   // --- LOGIC: FILTER PERUBAHAN ---
@@ -256,7 +229,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // --- LOGIC: TOMBOL (+) POPUP ---
-  void _showAddOptions() {
+  void showAddOptions() {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
@@ -646,12 +619,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ],
               ),
-      ),
-      // Tambahkan bottom navbar global
-      bottomNavigationBar: GlobalBottomNavBar(
-        currentIndex: _currentIndex,
-        onTabChanged: _onTabChanged,
-        onAddPressed: _showAddOptions,
       ),
     );
   }

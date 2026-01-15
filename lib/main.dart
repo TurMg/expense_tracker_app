@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'logic/services/category_service.dart'; // Import category service
-import 'presentation/screens/home_screen.dart'; // Import home screen langsung
+import 'presentation/screens/main_navigation_screen.dart'; // Import main navigation screen
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -37,8 +37,8 @@ class MyApp extends StatelessWidget {
         Locale('id', 'ID'), // Bahasa Indonesia
       ],
       locale: const Locale('id', 'ID'),
-      // Set home screen sebagai halaman utama
-      home: const HomeScreen(),
+      // Set main navigation screen sebagai halaman utama
+      home: const MainNavigationScreen(),
     );
   }
 }
