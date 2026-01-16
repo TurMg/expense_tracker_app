@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
+import '../../data/local/database_helper.dart';
 
 class StatisticsScreen extends StatefulWidget {
   const StatisticsScreen({super.key});
@@ -12,7 +14,21 @@ class StatisticsScreen extends StatefulWidget {
 class _StatisticsScreenState extends State<StatisticsScreen> {
   bool _isExpense = true; // Tab Pengeluaran Aktif
   int _selectedPeriodIndex =
-      0; // 0: Harian, 1: Mingguan, 2: Bulanan, 3: Tahunan
+      0; // 0: Harian, 1: Mingguan (gunakan logika bulanan), 2: Bulanan (gunakan logika tahunan)
+
+  List<Map<String, dynamic>> _realCategories = [];
+  List<FlSpot> _chartSpots = [];
+  List<DateTime> _chartDates = [];
+  List<String> _monthLabels = [];
+  double _totalAmount = 0.0;
+  int _numWeeks = 4; // default
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStatisticsData();
+  }
 
   // Warna UI (Sesuai Gambar)
   final Color _activeBlue = const Color(0xFF4296F4);
@@ -21,6 +37,145 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   final Color _textGrey = const Color(0xFF9E9E9E);
   final Color _redBadgeBg = const Color(0xFFFEECEB);
   final Color _redBadgeText = const Color(0xFFE57373);
+
+  Future<void> _loadStatisticsData() async {
+    setState(() => _isLoading = true);
+
+    String type = _isExpense ? 'EXPENSE' : 'INCOME';
+    DateTime now = DateTime.now();
+
+    // Tentukan periode
+    DateTime startDate;
+    DateTime endDate = now;
+    if (_selectedPeriodIndex == 0) {
+      // Harian: 7 hari terakhir
+      startDate = now.subtract(const Duration(days: 6));
+    } else if (_selectedPeriodIndex == 1) {
+      // Mingguan: bulan ini
+      startDate = DateTime(now.year, now.month, 1);
+    } else {
+      // Bulanan: 12 bulan terakhir
+      startDate = DateTime(now.year - 1, now.month + 1, 1);
+    }
+
+    // Ambil transaksi dalam periode
+    List<Map<String, dynamic>> transactions =
+        await DatabaseHelper.instance.query(
+      "SELECT * FROM transactions WHERE type = ? AND date >= ? AND date <= ?",
+      [type, startDate.toIso8601String(), endDate.toIso8601String()],
+    );
+
+    // Hitung total amount
+    if (_selectedPeriodIndex == 0) {
+      // Untuk harian, total hari ini saja
+      DateTime today = DateTime(now.year, now.month, now.day);
+      _totalAmount = transactions.where((t) {
+        DateTime tDate = DateTime.parse(t['date']);
+        return tDate.year == today.year &&
+            tDate.month == today.month &&
+            tDate.day == today.day;
+      }).fold(0.0, (sum, t) => sum + (t['amount'] as double));
+    } else {
+      _totalAmount =
+          transactions.fold(0.0, (sum, t) => sum + (t['amount'] as double));
+    }
+
+    // Untuk chart: hitung berdasarkan periode
+    if (_selectedPeriodIndex == 0) {
+      // Harian: 7 hari terakhir
+      _chartSpots = [];
+      _chartDates = [];
+      for (int i = 0; i < 7; i++) {
+        DateTime date = startDate.add(Duration(days: i));
+        _chartDates.add(date);
+        double dayTotal = transactions.where((t) {
+          DateTime tDate = DateTime.parse(t['date']);
+          return tDate.year == date.year &&
+              tDate.month == date.month &&
+              tDate.day == date.day;
+        }).fold(0.0, (sum, t) => sum + (t['amount'] as double));
+        _chartSpots
+            .add(FlSpot(i.toDouble(), dayTotal / 100000)); // Scale untuk chart
+      }
+    } else if (_selectedPeriodIndex == 1) {
+      // Mingguan: bagi bulan ini menjadi beberapa minggu sesuai jumlah hari
+      _chartSpots = [];
+      DateTime monthStart = startDate;
+      int daysInMonth = DateTime(now.year, now.month + 1, 0).day;
+      _numWeeks = (daysInMonth / 7).ceil();
+      int weekLength = (daysInMonth / _numWeeks).ceil();
+      for (int i = 0; i < _numWeeks; i++) {
+        DateTime weekStart = monthStart.add(Duration(days: i * weekLength));
+        DateTime weekEnd = (i == _numWeeks - 1) ? endDate : weekStart.add(Duration(days: weekLength - 1));
+        double weekTotal = transactions.where((t) {
+          DateTime tDate = DateTime.parse(t['date']);
+          return tDate.isAfter(weekStart.subtract(const Duration(days: 1))) &&
+              tDate.isBefore(weekEnd.add(const Duration(days: 1)));
+        }).fold(0.0, (sum, t) => sum + (t['amount'] as double));
+        _chartSpots.add(FlSpot(i.toDouble(), weekTotal / 100000));
+      }
+    } else {
+      // Bulanan: 12 bulan terakhir
+      _chartSpots = [];
+      _monthLabels = [];
+      for (int i = 11; i >= 0; i--) {
+        DateTime month = DateTime(now.year, now.month - i, 1);
+        String monthLabel = DateFormat('MMM', 'id_ID').format(month);
+        _monthLabels.add(monthLabel);
+        double monthTotal = transactions.where((t) {
+          DateTime tDate = DateTime.parse(t['date']);
+          return tDate.year == month.year && tDate.month == month.month;
+        }).fold(0.0, (sum, t) => sum + (t['amount'] as double));
+        _chartSpots.add(FlSpot((11 - i).toDouble(), monthTotal / 100000));
+      }
+    }
+
+    // Ambil kategori dengan statistik
+    await _loadCategoriesWithStats(transactions);
+
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _loadCategoriesWithStats(
+      List<Map<String, dynamic>> transactions) async {
+    // Group by categoryId
+    Map<String, List<Map<String, dynamic>>> grouped = {};
+    for (var t in transactions) {
+      String catId = t['categoryId'];
+      if (!grouped.containsKey(catId)) grouped[catId] = [];
+      grouped[catId]!.add(t);
+    }
+
+    // Ambil detail kategori
+    List<Map<String, dynamic>> categories = await DatabaseHelper.instance.query(
+        "SELECT * FROM categories WHERE type = ?",
+        [_isExpense ? 'EXPENSE' : 'INCOME']);
+
+    _realCategories = [];
+    for (var cat in categories) {
+      String catId = cat['id'];
+      if (grouped.containsKey(catId)) {
+        var trans = grouped[catId]!;
+        double total =
+            trans.fold(0.0, (sum, t) => sum + (t['amount'] as double));
+        _realCategories.add({
+          'name': cat['name'],
+          'count': '${trans.length} Transaksi',
+          'amount':
+              'Rp ${NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(total)}',
+          'pct': trans.length /
+              transactions.length, // Percentage berdasarkan jumlah transaksi
+          'color': Color(cat['colorCode']),
+          'icon': IconData(cat['iconCode'], fontFamily: 'MaterialIcons'),
+          'bgIcon': Color(cat['colorCode']).withOpacity(0.1),
+        });
+      }
+    }
+
+    // Sort by total descending
+    _realCategories.sort((a, b) => double.parse(b['pct'].toString())
+        .compareTo(double.parse(a['pct'].toString())));
+  }
 
   // Data Dummy Kategori
   final List<Map<String, dynamic>> _categories = [
@@ -96,7 +251,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
 
             const SizedBox(height: 20),
 
-            // 2. PERIOD FILTER 
+            // 2. PERIOD FILTER
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -105,8 +260,6 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
                 _buildPeriodChip("Mingguan", 1),
                 const SizedBox(width: 4),
                 _buildPeriodChip("Bulanan", 2),
-                const SizedBox(width: 4),
-                _buildPeriodChip("Tahunan", 3),
               ],
             ),
 
@@ -145,11 +298,17 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
                   const SizedBox(height: 20),
 
                   // TOTAL SUMMARY DI BAWAH CHART
-                  Text("Total Pengeluaran Minggu Ini",
+                  Text(
+                      _selectedPeriodIndex == 0
+                          ? "Total Pengeluaran Hari Ini"
+                          : _selectedPeriodIndex == 1
+                              ? "Total Pengeluaran Bulan Ini"
+                              : "Total Pengeluaran Tahun Ini",
                       style:
                           GoogleFonts.poppins(color: _textGrey, fontSize: 12)),
                   const SizedBox(height: 4),
-                  Text("Rp 5.200.000",
+                  Text(
+                      "Rp ${NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(_totalAmount)}",
                       style: GoogleFonts.poppins(
                           color: _textBlack,
                           fontSize: 24,
@@ -180,7 +339,9 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
             const SizedBox(height: 16),
 
             // 5. LIST KATEGORI
-            ..._categories.map((cat) => _buildCategoryItem(cat)).toList(),
+            ...(_realCategories.isNotEmpty ? _realCategories : _categories)
+                .map((cat) => _buildCategoryItem(cat))
+                .toList(),
 
             const SizedBox(height: 30),
           ],
@@ -283,23 +444,17 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
       ),
       borderData: FlBorderData(show: false),
       minX: 0,
-      maxX: 6,
+      maxX: _selectedPeriodIndex == 0
+          ? 6
+          : _selectedPeriodIndex == 1
+              ? _numWeeks - 1
+              : 11,
       minY: 0,
-      maxY: 6,
-      // FORCE TOOLTIP MUNCUL DI INDEX 4 (JUMAT)
-      showingTooltipIndicators: [
-        ShowingTooltipIndicators([
-          LineBarSpot(
-            LineChartBarData(spots: []),
-            0,
-            LineChartBarData(spots: []).spots.isEmpty
-                ? const FlSpot(4, 4.8)
-                : const FlSpot(4, 4.8),
-          ),
-        ])
-      ],
+      maxY: _chartSpots.isNotEmpty
+          ? (_chartSpots.map((s) => s.y).reduce((a, b) => a > b ? a : b) * 1.2).clamp(1.0, double.infinity)
+          : 6,
       lineTouchData: LineTouchData(
-        enabled: false,
+        enabled: true,
         getTouchedSpotIndicator:
             (LineChartBarData barData, List<int> spotIndexes) {
           return spotIndexes.map((spotIndex) {
@@ -329,8 +484,9 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
           tooltipMargin: 16,
           getTooltipItems: (List<LineBarSpot> touchedBarSpots) {
             return touchedBarSpots.map((barSpot) {
+              double actualAmount = barSpot.y * 100000;
               return LineTooltipItem(
-                'Rp 1.2jt',
+                'Rp ${NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(actualAmount)}',
                 GoogleFonts.poppins(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
@@ -342,20 +498,22 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
       ),
       lineBarsData: [
         LineChartBarData(
-          spots: const [
-            FlSpot(0, 2.0), // Sen
-            FlSpot(1, 2.8), // Sel
-            FlSpot(2, 2.2), // Rab
-            FlSpot(3, 3.5), // Kam
-            FlSpot(4, 4.8), // Jum (Puncak)
-            FlSpot(5, 3.0), // Sab
-            FlSpot(6, 3.8), // Min
-          ],
+          spots: _chartSpots.isNotEmpty
+              ? _chartSpots
+              : const [
+                  FlSpot(0, 2.0), // Sen
+                  FlSpot(1, 2.8), // Sel
+                  FlSpot(2, 2.2), // Rab
+                  FlSpot(3, 3.5), // Kam
+                  FlSpot(4, 4.8), // Jum (Puncak)
+                  FlSpot(5, 3.0), // Sab
+                  FlSpot(6, 3.8), // Min
+                ],
           isCurved: true,
           color: _activeBlue.withOpacity(0.5),
           barWidth: 3,
           isStrokeCapRound: true,
-          dotData: const FlDotData(show: false),
+          dotData: const FlDotData(show: true),
           belowBarData: BarAreaData(
             show: true,
             gradient: LinearGradient(
@@ -376,37 +534,88 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
     TextStyle style = GoogleFonts.poppins(
         color: Colors.grey[400], fontWeight: FontWeight.w500, fontSize: 12);
 
-    // Highlight Jumat
-    if (value.toInt() == 4) {
-      style = GoogleFonts.poppins(
-          color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12);
-    }
-
     Widget text;
-    switch (value.toInt()) {
-      case 0:
-        text = Text('Sen', style: style);
-        break;
-      case 1:
-        text = Text('Sel', style: style);
-        break;
-      case 2:
-        text = Text('Rab', style: style);
-        break;
-      case 3:
-        text = Text('Kam', style: style);
-        break;
-      case 4:
-        text = Text('Jum', style: style);
-        break;
-      case 5:
-        text = Text('Sab', style: style);
-        break;
-      case 6:
-        text = Text('Min', style: style);
-        break;
-      default:
+    if (_selectedPeriodIndex == 0) {
+      // Harian: nama hari sesuai tanggal
+      if (value.toInt() < _chartDates.length) {
+        DateTime date = _chartDates[value.toInt()];
+        String dayName;
+        switch (date.weekday) {
+          case DateTime.monday:
+            dayName = 'Sen';
+            break;
+          case DateTime.tuesday:
+            dayName = 'Sel';
+            break;
+          case DateTime.wednesday:
+            dayName = 'Rab';
+            break;
+          case DateTime.thursday:
+            dayName = 'Kam';
+            break;
+          case DateTime.friday:
+            dayName = 'Jum';
+            break;
+          case DateTime.saturday:
+            dayName = 'Sab';
+            break;
+          case DateTime.sunday:
+            dayName = 'Min';
+            break;
+          default:
+            dayName = '';
+        }
+        // Highlight hari terkini (hari ini)
+        DateTime now = DateTime.now();
+        if (date.year == now.year && date.month == now.month && date.day == now.day) {
+          style = GoogleFonts.poppins(
+              color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12);
+        }
+        text = Text(dayName, style: style);
+      } else {
         text = const Text('');
+      }
+    } else if (_selectedPeriodIndex == 1) {
+      // Mingguan: Minggu-1, Minggu-2, Minggu-3, Minggu-4, Minggu-5
+      DateTime now = DateTime.now();
+      int daysIntoMonth = now.day - 1;
+      int currentWeekIndex = (daysIntoMonth / 7).floor();
+      TextStyle finalStyle = style;
+      if (value.toInt() == currentWeekIndex) {
+        finalStyle = GoogleFonts.poppins(
+            color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12);
+      }
+      switch (value.toInt()) {
+        case 0:
+          text = Text('Minggu-1', style: finalStyle);
+          break;
+        case 1:
+          text = Text('Minggu-2', style: finalStyle);
+          break;
+        case 2:
+          text = Text('Minggu-3', style: finalStyle);
+          break;
+        case 3:
+          text = Text('Minggu-4', style: finalStyle);
+          break;
+        case 4:
+          text = Text('Minggu-5', style: finalStyle);
+          break;
+        default:
+          text = const Text('');
+      }
+    } else {
+      // Bulanan: label bulan sesuai data
+      if (value.toInt() < _monthLabels.length) {
+        TextStyle finalStyle = style;
+        if (value.toInt() == 11) {
+          finalStyle = GoogleFonts.poppins(
+              color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12);
+        }
+        text = Text(_monthLabels[value.toInt()], style: finalStyle);
+      } else {
+        text = const Text('');
+      }
     }
 
     return SideTitleWidget(axisSide: meta.axisSide, child: text);
@@ -417,13 +626,19 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   Widget _buildMainTab(String label, bool isExp) {
     bool isActive = _isExpense == isExp;
     return GestureDetector(
-      onTap: () => setState(() => _isExpense = isExp),
+      onTap: () {
+        if (_isExpense != isExp) {
+          setState(() => _isExpense = isExp);
+          _loadStatisticsData();
+        }
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
           color: isActive
               ? (isExp ? const Color(0xFFF4A285) : const Color(0xFF4CAF50))
-              : Colors.transparent, // Active jadi Oranye untuk Pengeluaran, Hijau untuk Pemasukan
+              : Colors
+                  .transparent, // Active jadi Oranye untuk Pengeluaran, Hijau untuk Pemasukan
           borderRadius: BorderRadius.circular(10),
         ),
         child: Center(
@@ -442,7 +657,12 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   Widget _buildPeriodChip(String label, int index) {
     bool isActive = _selectedPeriodIndex == index;
     return GestureDetector(
-      onTap: () => setState(() => _selectedPeriodIndex = index),
+      onTap: () {
+        if (_selectedPeriodIndex != index) {
+          setState(() => _selectedPeriodIndex = index);
+          _loadStatisticsData();
+        }
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         decoration: BoxDecoration(
